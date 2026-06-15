@@ -6,6 +6,8 @@
 
 import type { AIProvider, AIProviderConfig } from "./types";
 import { OllamaProvider } from "./providers/ollama";
+import { GeminiProvider } from "./providers/gemini";
+import { GroqProvider } from "./providers/groq";
 import { createAILogger } from "./utils/logger";
 
 const log = createAILogger("provider-factory");
@@ -19,13 +21,17 @@ export function createProvider(config: AIProviderConfig): AIProvider {
     case "ollama":
       return new OllamaProvider(config);
 
+    case "gemini":
+      return new GeminiProvider(config);
+
+    case "groq":
+      return new GroqProvider(config);
+
     // ── Future providers ──────────────────────────────────
     // case "openai":
     //   return new OpenAIProvider(config);
     // case "anthropic":
     //   return new AnthropicProvider(config);
-    // case "gemini":
-    //   return new GeminiProvider(config);
 
     default:
       log.error(`Unsupported AI provider: ${config.provider}`);

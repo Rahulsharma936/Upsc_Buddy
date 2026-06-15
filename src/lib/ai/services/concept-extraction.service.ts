@@ -127,7 +127,7 @@ export const conceptExtractionService = {
       return {
         jobId: "",
         concepts: [],
-        warnings: ["AI provider is not available. Please ensure Ollama is running and try again."],
+        warnings: ["AI provider is not available. Please check your AI configuration and try again."],
         stats,
         processingTimeMs: Date.now() - startTime,
       };

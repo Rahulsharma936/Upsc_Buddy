@@ -55,6 +55,17 @@ function getProviderConfig(): AIProviderConfig {
         maxRetries: 3,
       };
 
+    case "groq":
+      return {
+        provider: "groq",
+        baseUrl: process.env.GROQ_BASE_URL ?? "https://api.groq.com",
+        model: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+        defaultTemperature: 0.1,
+        defaultMaxTokens: 4096,
+        timeoutMs: 30_000, // Groq is extremely fast
+        maxRetries: 3,
+      };
+
     default:
       throw new Error(`Unsupported AI provider: ${provider}`);
   }

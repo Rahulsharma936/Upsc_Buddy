@@ -34,6 +34,7 @@ export const AI_PROVIDERS = [
   "openai",
   "anthropic",
   "gemini",
+  "groq",
 ] as const;
 
 export type AIProviderName = (typeof AI_PROVIDERS)[number];

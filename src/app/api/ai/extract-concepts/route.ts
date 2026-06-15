@@ -42,7 +42,7 @@ function classifyExtractionStatus(result: {
   if (warnings.some((w) => w.includes("AI provider is not available"))) {
     return {
       extractionStatus: "ai_unavailable",
-      userMessage: "AI service is not available. Please ensure Ollama is running and try again.",
+      userMessage: "AI service is not available. Please check your AI configuration and try again.",
     };
   }
 
