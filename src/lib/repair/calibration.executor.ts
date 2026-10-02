@@ -1,31 +1,28 @@
 /**
  * R3.8 — Calibration Repair Executor
  *
- * Executes the "calibration" repair intent.
- * Consumes a RepairRequest (from R3.1) where failureReason = "overconfident".
+ * Handles the "calibration" repair intent for failureReason = "overconfident".
  *
- * The student said "I was confident, but got it wrong." The ONLY authoritative
- * fact is that their confidence did not match their outcome. This executor
- * makes that mismatch visible and actionable:
+ * When a student reports "I was confident, but got it wrong", they're asserting
+ * they believed they had the knowledge but their confidence didn't match the
+ * outcome. This executor makes that mismatch visible and actionable:
  *
- *   A. What you believed — the assumption that felt certain
- *   B. What was actually correct — the fact, distinction, or rule that decided it
- *   C. Where the confidence broke — why the belief felt right but was wrong
- *   D. Self-check — a concrete question the student can ask themselves next time
- *   E. Verification — the SAME R3.3 MCQ mechanism the other executors use
+ *   A. whatYouBelieved — the assumption the student held with certainty
+ *   B. whatWasActuallyCorrect — the fact, distinction, or rule that decided it
+ *   C. whereConfidenceBroke — why the belief felt right but was wrong
+ *   D. selfCheck — a concrete question the student can ask themselves next time
+ *   E. verification — a new MCQ with a similar trap (reuses the R3.3 pipeline)
  *
- * Anchored to the actual failed question. With no question context the repair
- * addresses the most commonly over-confidently confused aspect of the concept
- * rather than inventing a mismatch that never happened.
+ * When question context exists, the repair is anchored to the actual failed
+ * question. Without context, it addresses the most commonly over-confidently
+ * confused aspect of the concept without inventing a mismatch that never happened.
  *
- * Does NOT:
- *   - Reteach the concept from scratch — the student thought they knew it
- *   - Convert overconfident into concept_not_understood or could_not_recall
- *   - Re-diagnose the student, or use R2 diagnostic scoring
- *   - Modify SM-2 or mastery
- *   - Mark the student as "resolved"
- *   - Create database records
- *   - Introduce a second verification mechanism
+ * Boundaries (enforced by tests, not just convention):
+ *   - No concept reteaching — the student thought they knew it
+ *   - No failure reason reinterpretation — overconfident stays overconfident
+ *   - No R2 diagnostic scoring, gap classification, or mastery mutation
+ *   - No database access, no event logging, no side effects
+ *   - No novel verification mechanism — uses the shared R3.3 MCQ pipeline
  *
  * @see RepairRequest in repair-request.builder.ts
  * @see concept-teaching.executor.ts — the executor pattern this follows
@@ -40,7 +37,12 @@ import type { RepairRequest, RepairQuestionContext } from "./repair-request.buil
 
 /**
  * Surfaces the mismatch between what the student believed and what was true.
- * Four fields, each answering one of the repair's stated objectives.
+ *
+ * Each field maps to one of the executor's stated objectives:
+ *   whatYouBelieved         → "What did I think was true?"
+ *   whatWasActuallyCorrect  → "What was actually correct?"
+ *   whereConfidenceBroke    → "Why did my belief feel right but turn out wrong?"
+ *   selfCheck               → "What should I ask myself next time?"
  */
 export interface CalibrationBreakdown {
   /** The assumption or belief the student held with confidence. */
@@ -51,7 +53,9 @@ export interface CalibrationBreakdown {
    * Why the student's belief felt right but was wrong — the source of
    * the overconfidence (e.g., partial truth, common confusion, plausible
    * but outdated information).
-   * null when no question context was available to pinpoint the mismatch.
+   *
+   * null when no question context was available — we refuse to invent
+   * a mismatch source for an overconfidence we can't pinpoint.
    */
   whereConfidenceBroke: string | null;
   /** A concrete self-check question the student can ask themselves next time. */
@@ -60,8 +64,10 @@ export interface CalibrationBreakdown {
 
 /**
  * Verification MCQ testing whether the student can now DISTINGUISH the correct
- * from the believed-correct. Structurally identical to the other executors'
- * verification so it flows through the same R3.3 endpoint and PracticeCard UI.
+ * from the believed-correct.
+ *
+ * Structurally identical to every other executor's verification, so it flows
+ * through the same R3.3 endpoint and PracticeCard UI without special-casing.
  */
 export interface CalibrationVerification {
   question: string;
@@ -70,11 +76,11 @@ export interface CalibrationVerification {
   explanation: string;
 }
 
-/** Complete calibration repair output. */
+/** Complete calibration repair output, ready for student consumption. */
 export interface CalibrationRepair {
   requestId: string;
   conceptId: string;
-  /** The student's original failure reason — preserved, never reinterpreted. */
+  /** The student's original failure reason — preserved exactly, never reinterpreted. */
   failureReason: "overconfident";
   /** The repair intent — always "calibration" for this executor. */
   repairIntent: "calibration";
@@ -89,6 +95,15 @@ export interface CalibrationRepair {
 
 // ─── Zod Schema for AI Response Validation ──────────────────
 
+/**
+ * Validates the raw AI JSON response before it becomes a CalibrationRepair.
+ *
+ * Constraints are calibrated for UPSC-prep content:
+ *   - min(10) on required strings prevents hollow one-word answers
+ *   - max limits prevent runaway generation
+ *   - whereConfidenceBroke uses .catch(null) so non-string values (e.g. a number)
+ *     degrade gracefully to null rather than crashing the repair pipeline
+ */
 export const calibrationResponseSchema = z.object({
   whatYouBelieved: z.string().min(10).max(800).trim(),
   whatWasActuallyCorrect: z.string().min(10).max(1000).trim(),
@@ -111,33 +126,72 @@ type ValidatedResponse = z.infer<typeof calibrationResponseSchema>;
 
 // ─── Prompt Construction ────────────────────────────────────
 
+/**
+ * System prompt for the calibration AI call.
+ *
+ * Organised into three sections for AI comprehension:
+ *   1. RESPONSE FORMAT — output shape and encoding rules
+ *   2. CONTENT RULES — what each output field should contain, with
+ *      concrete good/bad examples to anchor generation quality
+ *   3. BOUNDARIES — hard prohibitions that prevent mode collapse
+ *      into concept reteaching or diagnosis
+ *
+ * The MISMATCH framing is the critical lever: every rule steers
+ * the AI away from knowledge remediation and toward confidence
+ * calibration.
+ */
 const SYSTEM_PROMPT = `
-You are a focused UPSC calibration coach.
+You are a UPSC calibration coach specialising in overconfidence interventions.
 
-The student was CONFIDENT on a practice MCQ but got it wrong. The only thing
-you know is that their confidence did not match their outcome.
+The student answered a practice MCQ incorrectly and self-reported:
+"I was confident, but got it wrong." They believe they possessed the required
+knowledge but their confidence did not match their outcome — a calibration
+failure, not necessarily a knowledge failure.
 
-STRICT RULES:
-1. Respond ONLY with valid JSON.
-2. No markdown.
-3. No conversational text.
-4. Do NOT reteach the concept from scratch. The student believed they already knew it.
-5. Do NOT diagnose the student. Never claim they "don't understand the concept",
-   "have forgotten it", or have any kind of gap. You do not know the deeper cause.
-6. Focus on the MISMATCH: what the student likely believed, what was actually
-   correct, and why the belief felt right but was wrong.
-7. "whereConfidenceBroke" must identify the source of the overconfidence — a
-   partial truth, a common confusion, a plausible-sounding but incorrect rule,
-   or outdated information. Use null only when no question context exists.
-8. "selfCheck" must be a concrete question the student can ask themselves before
-   committing to an answer next time — not generic advice like "study more".
-9. The verification question MUST test whether the student can now DISTINGUISH
-   the correct from the believed-correct — never the original question.
-10. All distractors in the verification must be plausible.
-11. Do NOT invent constitutional articles, committee names, schemes, or facts.
+RESPONSE FORMAT:
+1. Respond ONLY with valid JSON. No markdown, no prose, no code fences.
+
+CONTENT RULES:
+2. "whatYouBelieved" — Name the specific assumption or belief the student
+   likely held with confidence: a partial truth, a commonly confused rule,
+   or a plausible-sounding but incorrect fact.
+3. "whatWasActuallyCorrect" — State the fact, distinction, or rule that
+   actually decided the answer. Focus on the decisive difference.
+4. "whereConfidenceBroke" — Identify the SOURCE of the overconfidence:
+   a partial truth, a common confusion, a plausible-sounding but incorrect
+   rule, or outdated information. Bad: "You were wrong."
+   Good: "The 42nd Amendment covers many topics, making it a plausible
+   answer, but it predates the anti-defection law by nearly a decade."
+   Set to null ONLY when no question context is provided.
+5. "selfCheck" — A concrete question the student can ask themselves before
+   committing to an answer next time. Bad: "Study more carefully."
+   Good: "Ask yourself: 'Do I remember the specific year and Schedule
+   number, or am I guessing from a famous amendment?'"
+6. The verification question MUST test whether the student can DISTINGUISH
+   the correct from the believed-correct. It must be a NEW question — never
+   the original. All distractors must be plausible at UPSC level.
+
+BOUNDARIES:
+7. Do NOT reteach the concept. The student believed they already knew it.
+8. Do NOT diagnose the student. Never claim they "don't understand the concept",
+   "have forgotten it", or have any kind of knowledge gap.
+9. Focus exclusively on the MISMATCH: what was believed, what was true, and
+   why the belief felt right but was wrong.
+10. Do NOT fabricate constitutional articles, committee names, schemes, or facts.
+11. Maintain UPSC-level factual accuracy throughout.
 12. Be precise and accurate — UPSC-level correctness is required.
 `;
 
+/**
+ * Builds the user-facing prompt with concept metadata and question context.
+ *
+ * Two modes:
+ *   - With question context → anchored to the specific failed question, with
+ *     the student's confident selection and the correct answer shown explicitly
+ *   - Without question context → addresses the most commonly over-confidently
+ *     confused aspect of the concept, with an explicit prohibition against
+ *     inventing a mismatch that didn't happen
+ */
 function buildUserPrompt(
   conceptName: string,
   subject: string,
@@ -209,7 +263,7 @@ Respond in this EXACT JSON format:
 
 // ─── Executor Input ─────────────────────────────────────────
 
-/** Mirrors the sibling executors' input so the API route treats all alike. */
+/** Mirrors the sibling executors' input shape so the API route treats all alike. */
 export interface CalibrationInput {
   request: RepairRequest;
   conceptName: string;
@@ -222,6 +276,11 @@ export interface CalibrationInput {
 /**
  * Execute a calibration repair.
  *
+ * Flow: guard → prompt → AI call → validate → transform
+ *
+ * The guard fires before the AI call, ensuring we never burn tokens
+ * on a request that was mis-routed to this executor.
+ *
  * @param input - RepairRequest + concept metadata
  * @returns CalibrationRepair ready for student consumption
  * @throws Error if the intent is wrong, the AI call fails, or validation fails
@@ -231,7 +290,8 @@ export async function executeCalibration(
 ): Promise<CalibrationRepair> {
   const { request, conceptName, conceptSubject, conceptKeywords } = input;
 
-  // Guard: only handle calibration intent
+  // ── Intent guard ──────────────────────────────────────
+  // Fires before the AI call so we never waste tokens on a mis-routed request.
   if (request.repairIntent !== "calibration") {
     throw new Error(
       `CalibrationExecutor only handles "calibration" intent, ` +
@@ -239,6 +299,7 @@ export async function executeCalibration(
     );
   }
 
+  // ── Build prompt and call AI ──────────────────────────
   const userPrompt = buildUserPrompt(
     conceptName,
     conceptSubject,
@@ -254,6 +315,7 @@ export async function executeCalibration(
     format: "json",
   });
 
+  // ── Validate AI response against schema ───────────────
   const validation = validateAIResponse(
     aiResponse.content,
     calibrationResponseSchema,
@@ -267,6 +329,7 @@ export async function executeCalibration(
 
   const data: ValidatedResponse = validation.data;
 
+  // ── Transform validated data into the repair output ───
   return {
     requestId: request.requestId,
     conceptId: request.conceptId,

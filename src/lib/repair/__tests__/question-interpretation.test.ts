@@ -379,9 +379,10 @@ async function section5() {
   assert(missing.status === 404, "5m: missing concept rejected with 404");
 
   // An intent with no executor still reports itself as unimplemented.
+  // (careless_mistake is now implemented via R3.9; use not_sure → clarification instead)
   routeState.concept = { userId: "user-1", name: "x", displayName: "X", subject: "Polity", keywords: [] };
   resetAI();
-  const notImpl = await callRepair({ conceptId: CONCEPT_ID, failureReason: "careless_mistake" });
+  const notImpl = await callRepair({ conceptId: CONCEPT_ID, failureReason: "not_sure" });
   assert(notImpl.status === 200, "5n: unimplemented intent still returns 200");
   assert(notImpl.json.data?.["repair"] === null, "5o: unimplemented intent returns a null repair");
 

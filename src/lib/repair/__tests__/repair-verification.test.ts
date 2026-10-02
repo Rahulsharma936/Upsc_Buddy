@@ -132,8 +132,9 @@ section("1. Payload validation (Zod, strict)");
   );
 
   // Intents with no executor cannot be verified — no fabricated evidence.
+  // (calibration is now implemented via R3.8; not_sure -> clarification is the remaining unexercised intent)
   const noExecutor = validateRepairVerification(
-    validPayload({ failureReason: "overconfident", repairIntent: "calibration" }),
+    validPayload({ failureReason: "not_sure", repairIntent: "clarification" }),
   );
   assert(!noExecutor.success, "1m: intent without an executor rejected");
   assert(
@@ -378,9 +379,9 @@ section("7. R3.1 → R3.2a → R3.3 requestId survival");
 
   // Only concept_teaching is verifiable in R3.2a.
   // The verifiable set grows as executors land. Asserted as a set, not by position.
-  assert(VERIFIABLE_REPAIR_INTENTS.length === 4, "7f: four verifiable intents once R3.7 lands");
+  assert(VERIFIABLE_REPAIR_INTENTS.length === 6, "7f: six verifiable intents with R3.8 and R3.9 landed");
   for (const intent of [
-    "concept_teaching", "active_recall", "question_interpretation", "uncertainty_resolution",
+    "concept_teaching", "active_recall", "question_interpretation", "uncertainty_resolution", "calibration", "error_awareness",
   ] as const) {
     assert(VERIFIABLE_REPAIR_INTENTS.includes(intent), `7g: ${intent} is verifiable`);
   }
@@ -394,7 +395,7 @@ section("7. R3.1 → R3.2a → R3.3 requestId survival");
     }));
     if (!v.success) rejected++;
   }
-  assert(rejected === 3, "7i: 3 of 7 failure reasons still have no verifiable executor");
+  assert(rejected === 1, "7i: 1 of 7 failure reasons (not_sure -> clarification) still has no verifiable executor");
 
   console.log("  ✓ R3.1 → R3.2a → R3.3 pipeline flow validated");
 }

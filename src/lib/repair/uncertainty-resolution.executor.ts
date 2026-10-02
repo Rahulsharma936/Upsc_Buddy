@@ -1,11 +1,11 @@
 /**
  * R3.7 — Uncertainty Resolution Repair Executor
  *
- * Executes the "uncertainty_resolution" repair intent.
- * Consumes a RepairRequest (from R3.1) where failureReason = "guessed".
+ * Handles the "uncertainty_resolution" repair intent for failureReason = "guessed".
  *
- * The student said "I wasn't sure and guessed." The ONLY authoritative fact is
- * that they were uncertain. This executor does not decide WHY:
+ * When a student reports "I wasn't sure and guessed", they're asserting they
+ * could not choose confidently between the options. The ONLY authoritative fact
+ * is that they were uncertain. This executor does not decide WHY:
  *
  *   - It does NOT conclude the student has a concept gap.
  *   - It does NOT conclude the student has a memory gap.
@@ -14,21 +14,27 @@
  * Instead it resolves the uncertainty around the specific question, turning
  * "I wasn't sure, so I guessed" into "I know what to look for next time":
  *
- *   A. Key distinction — the evidence separating the answer from the distractors
- *   B. Why it is better supported — the case for the correct option
- *   C. Competing option — the most plausible rival, addressed where useful
- *   D. How to decide — a targeted rule for telling them apart next time
- *   E. Verification — the SAME R3.3 MCQ mechanism the other executors use
+ *   A. keyDistinction      — the evidence separating the answer from the distractors
+ *   B. whyBetterSupported  — the case for the correct option
+ *   C. competingOption     — the most plausible rival, addressed where useful
+ *   D. howToDecide         — a targeted rule for telling them apart next time
+ *   E. verification        — the SAME R3.3 MCQ mechanism the other executors use
  *
- * Does NOT:
- *   - Re-diagnose the student, or use R2 diagnostic scoring
- *   - Modify SM-2 or mastery
- *   - Mark the student as "resolved"
- *   - Create database records
- *   - Introduce a second verification mechanism
+ * When question context exists, the repair is anchored to the actual failed
+ * question. Without context, it addresses common distinction-confusion patterns
+ * for the concept without inventing a competing option that was never presented.
+ *
+ * Boundaries (enforced by tests, not just convention):
+ *   - No diagnosis — the executor NEVER concludes a concept gap, memory gap,
+ *     or any gap; it does not know why the student guessed
+ *   - No concept reteaching — resolve the specific uncertainty, nothing more
+ *   - No failure reason reinterpretation — "guessed" stays "guessed"
+ *   - No R2 diagnostic scoring, gap classification, or mastery mutation
+ *   - No database access, no event logging, no side effects
+ *   - No novel verification mechanism — uses the shared R3.3 MCQ pipeline
  *
  * @see RepairRequest in repair-request.builder.ts
- * @see concept-teaching.executor.ts — the executor pattern this follows
+ * @see error-awareness.executor.ts — structurally parallel executor (R3.9)
  */
 
 import { z } from "zod";
@@ -40,7 +46,12 @@ import type { RepairRequest, RepairQuestionContext } from "./repair-request.buil
 
 /**
  * What separates the correct option from the ones that tempted the student.
- * Four fields, each answering one of the repair's stated objectives.
+ *
+ * Each field maps to one of the executor's stated objectives:
+ *   keyDistinction    → "What separates the right answer from the wrong ones?"
+ *   whyBetterSupported → "Why is the correct option the right one?"
+ *   competingOption   → "Which option was most tempting and why is it wrong?"
+ *   howToDecide       → "How do I tell them apart next time?"
  */
 export interface UncertaintyResolutionBreakdown {
   /** The distinction or evidence that separates correct from distractors. */
@@ -49,7 +60,9 @@ export interface UncertaintyResolutionBreakdown {
   whyBetterSupported: string;
   /**
    * The most plausible competing option and why it falls short.
-   * null when no question context made a specific rival identifiable.
+   *
+   * null when no question context made a specific rival identifiable —
+   * we refuse to invent a competitor that was never presented.
    */
   competingOption: string | null;
   /** A targeted way to tell these apart next time. */
@@ -58,8 +71,9 @@ export interface UncertaintyResolutionBreakdown {
 
 /**
  * Verification MCQ testing the DISTINCTION the student was unsure about.
- * Structurally identical to the other executors' verification so it flows
- * through the same R3.3 endpoint and the same PracticeCard UI.
+ *
+ * Structurally identical to every other executor's verification, so it flows
+ * through the same R3.3 endpoint and PracticeCard UI without special-casing.
  */
 export interface UncertaintyResolutionVerification {
   question: string;
@@ -68,11 +82,11 @@ export interface UncertaintyResolutionVerification {
   explanation: string;
 }
 
-/** Complete uncertainty resolution repair output. */
+/** Complete uncertainty resolution repair output, ready for student consumption. */
 export interface UncertaintyResolutionRepair {
   requestId: string;
   conceptId: string;
-  /** The student's original failure reason — preserved, never reinterpreted. */
+  /** The student's original failure reason — preserved exactly, never reinterpreted. */
   failureReason: "guessed";
   /** The repair intent — always "uncertainty_resolution" for this executor. */
   repairIntent: "uncertainty_resolution";
@@ -87,6 +101,15 @@ export interface UncertaintyResolutionRepair {
 
 // ─── Zod Schema for AI Response Validation ──────────────────
 
+/**
+ * Validates the raw AI JSON response before it becomes an UncertaintyResolutionRepair.
+ *
+ * Constraints are calibrated for UPSC-prep content:
+ *   - min(10) on required strings prevents hollow one-word answers
+ *   - max limits prevent runaway generation (800–1000 chars depending on field)
+ *   - competingOption uses .catch(null) so non-string values (e.g. a number)
+ *     degrade gracefully to null rather than crashing the repair pipeline
+ */
 export const uncertaintyResolutionResponseSchema = z.object({
   keyDistinction: z.string().min(10).max(800).trim(),
   whyBetterSupported: z.string().min(10).max(1000).trim(),
@@ -109,32 +132,68 @@ type ValidatedResponse = z.infer<typeof uncertaintyResolutionResponseSchema>;
 
 // ─── Prompt Construction ────────────────────────────────────
 
+/**
+ * System prompt for the uncertainty resolution AI call.
+ *
+ * Organised into three sections for AI comprehension:
+ *   1. RESPONSE FORMAT — JSON-only rules
+ *   2. CONTENT RULES — what each output field should contain, with
+ *      concrete good/bad examples to anchor generation quality
+ *   3. BOUNDARIES — hard prohibitions, especially the NO-DIAGNOSIS rule
+ *      that prevents mode collapse into concept reteaching
+ *
+ * The DISCRIMINATION framing is the critical lever: every rule steers
+ * the AI toward resolving the specific uncertainty between options,
+ * not toward diagnosing or reteaching the underlying concept.
+ */
 const SYSTEM_PROMPT = `
 You are a focused UPSC discrimination coach.
 
 The student was UNSURE on a practice MCQ and guessed. The only thing you know is
 that they could not choose confidently between the options.
 
-STRICT RULES:
-1. Respond ONLY with valid JSON.
-2. No markdown.
-3. No conversational text.
-4. Do NOT diagnose the student. Never claim they "don't understand the concept",
+RESPONSE FORMAT:
+1. Respond ONLY with valid JSON. No markdown, no prose, no code fences.
+
+CONTENT RULES:
+2. "keyDistinction" — Name the specific evidence, criterion, or definition that
+   DISTINGUISHES the correct option from the distractors. Focus on the deciding
+   factor, not on restating the concept from scratch.
+   Bad: "You need to understand the concept better."
+   Good: "The Finance Commission recommends future allocation; the CAG checks past spending. Ask: advise or audit?"
+3. "whyBetterSupported" — Explain why the correct option is better supported
+   than the alternatives, citing the specific constitutional provision, date,
+   scope, or authority that anchors it.
+4. "competingOption" — Identify the most plausible rival option and explain why
+   it falls short. Use null ONLY when no question context is provided and
+   no specific rival can be identified. Do NOT invent a competing option.
+5. "howToDecide" — An actionable discrimination rule the student can apply to a
+   similar set of options next time. Must be a concrete test, not generic advice.
+   Bad: "Study the topic more carefully."
+   Good: "Ask whether the body ADVISES on future allocation or CHECKS past spending — that separates the Finance Commission from the CAG every time."
+6. The verification question MUST test the SAME distinction from a DIFFERENT angle —
+   never the original question with reworded options. All distractors must be
+   plausible at UPSC level.
+
+BOUNDARIES:
+7. Do NOT diagnose the student. Never claim they "don't understand the concept",
    "have forgotten it", or have any kind of gap. You do not know why they guessed.
-5. Do not reteach the topic from scratch. Resolve the specific uncertainty.
-6. Focus on what DISTINGUISHES the correct option from the tempting ones —
+8. Do NOT reteach the topic from scratch. Resolve the specific uncertainty.
+9. Focus on what DISTINGUISHES the correct option from the tempting ones —
    the evidence, criterion, date, scope, authority or definition that decides it.
-7. Address the most plausible competing option where the context identifies one.
-   Use null if no specific rival can be identified.
-8. "howToDecide" must be an actionable discrimination rule the student can apply
-   to a similar set of options next time.
-9. The verification question MUST test the SAME distinction from a DIFFERENT angle —
-   never the original question with reworded options.
-10. All distractors in the verification must be plausible.
-11. Do NOT invent constitutional articles, committee names, schemes, or facts.
-12. Be precise and accurate — UPSC-level correctness is required.
+10. Do NOT fabricate constitutional articles, committee names, schemes, or facts.
+11. Maintain UPSC-level factual accuracy throughout.
 `;
 
+/**
+ * Builds the user-facing prompt with concept metadata and question context.
+ *
+ * Two modes:
+ *   - With question context → anchored to the specific failed question, with
+ *     the student's guessed selection and the correct answer shown explicitly
+ *   - Without question context → addresses common distinction-confusion patterns
+ *     for the concept, with an explicit prohibition against inventing a rival
+ */
 function buildUserPrompt(
   conceptName: string,
   subject: string,
@@ -206,7 +265,7 @@ Respond in this EXACT JSON format:
 
 // ─── Executor Input ─────────────────────────────────────────
 
-/** Mirrors the sibling executors' input so the API route treats all alike. */
+/** Mirrors the sibling executors' input shape so the API route treats all alike. */
 export interface UncertaintyResolutionInput {
   request: RepairRequest;
   conceptName: string;
@@ -219,8 +278,13 @@ export interface UncertaintyResolutionInput {
 /**
  * Execute an uncertainty resolution repair.
  *
+ * Flow: guard → prompt → AI call → validate → transform
+ *
+ * The guard fires before the AI call, ensuring we never burn tokens
+ * on a request that was mis-routed to this executor.
+ *
  * @param input - RepairRequest + concept metadata
- * @returns UncertaintyResolutionRepair ready for student consumption
+ * @returns UncertaintyResolutionRepair ready for the student
  * @throws Error if the intent is wrong, the AI call fails, or validation fails
  */
 export async function executeUncertaintyResolution(
@@ -228,7 +292,8 @@ export async function executeUncertaintyResolution(
 ): Promise<UncertaintyResolutionRepair> {
   const { request, conceptName, conceptSubject, conceptKeywords } = input;
 
-  // Guard: only handle uncertainty_resolution intent
+  // ── Intent guard ──────────────────────────────────────
+  // Fires before the AI call so we never waste tokens on a mis-routed request.
   if (request.repairIntent !== "uncertainty_resolution") {
     throw new Error(
       `UncertaintyResolutionExecutor only handles "uncertainty_resolution" intent, ` +
@@ -236,6 +301,7 @@ export async function executeUncertaintyResolution(
     );
   }
 
+  // ── Build prompt and call AI ──────────────────────────
   const userPrompt = buildUserPrompt(
     conceptName,
     conceptSubject,
@@ -251,6 +317,7 @@ export async function executeUncertaintyResolution(
     format: "json",
   });
 
+  // ── Validate AI response against schema ───────────────
   const validation = validateAIResponse(
     aiResponse.content,
     uncertaintyResolutionResponseSchema,
@@ -264,6 +331,7 @@ export async function executeUncertaintyResolution(
 
   const data: ValidatedResponse = validation.data;
 
+  // ── Transform validated data into the repair output ───
   return {
     requestId: request.requestId,
     conceptId: request.conceptId,

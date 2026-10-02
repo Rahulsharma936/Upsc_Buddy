@@ -1,33 +1,33 @@
 /**
  * R3.6 — Question Interpretation Repair Executor
  *
- * Executes the "question_interpretation" repair intent.
- * Consumes a RepairRequest (from R3.1) where failureReason = "misunderstood_question".
+ * Handles the "question_interpretation" repair intent for
+ * failureReason = "misunderstood_question".
  *
- * The student said "I misunderstood the question/options." The problem was
- * reading the TASK, not necessarily the underlying concept, so this executor
- * does not reteach the topic. It takes the failed question apart:
+ * When a student reports "I misunderstood the question/options", they're
+ * asserting they may know the topic but failed to parse what the question
+ * was actually ASKING — an interpretation failure, not necessarily a
+ * knowledge failure. This executor respects that distinction absolutely:
  *
- *   A. What it asked — the actual task, restated plainly
- *   B. Decisive wording — the qualifier, constraint or framing that mattered
- *   C. Why your answer missed — how the selection failed that specific task
- *   D. What to look for — a transferable cue for similar UPSC questions
- *   E. Verification — the SAME R3.3 MCQ mechanism the other executors use
+ *   A. whatItAsked        — the actual task, restated plainly
+ *   B. decisiveWording    — the qualifier, constraint or framing that mattered
+ *   C. whyYourAnswerMissed — how the selection failed that specific task
+ *   D. whatToLookFor      — a transferable cue for similar UPSC questions
+ *   E. verification       — a new MCQ via the SAME R3.3 pipeline
  *
- * Anchored to the actual failed question. With no question context there is
- * no misread to explain, so the repair stays at the level of how questions of
- * this kind are framed rather than inventing a misreading that never happened.
+ * When question context exists, the repair is anchored to the actual failed
+ * question. Without context, it addresses how questions of this kind are
+ * typically framed without inventing a misreading that never happened.
  *
- * Does NOT:
- *   - Convert misunderstood_question into concept_not_understood
- *   - Re-diagnose the student, or use R2 diagnostic scoring
- *   - Modify SM-2 or mastery
- *   - Mark the student as "resolved"
- *   - Create database records
- *   - Introduce a second verification mechanism
+ * Boundaries (enforced by tests, not just convention):
+ *   - No concept reteaching — this is NOT a concept lesson
+ *   - No failure reason reinterpretation — misunderstood_question stays
+ *   - No R2 diagnostic scoring, gap classification, or mastery mutation
+ *   - No database access, no event logging, no side effects
+ *   - No novel verification mechanism — uses the shared R3.3 MCQ pipeline
  *
  * @see RepairRequest in repair-request.builder.ts
- * @see concept-teaching.executor.ts — the executor pattern this follows
+ * @see error-awareness.executor.ts — the gold-standard executor pattern (R3.9)
  */
 
 import { z } from "zod";
@@ -38,8 +38,14 @@ import type { RepairRequest, RepairQuestionContext } from "./repair-request.buil
 // ─── Output Types ───────────────────────────────────────────
 
 /**
- * The breakdown of what the question was actually asking.
- * Four fields, each answering one of the repair's stated objectives.
+ * Surfaces the interpretation failure and equips the student with a
+ * transferable reading strategy.
+ *
+ * Each field maps to one of the executor's stated objectives:
+ *   whatItAsked        → "What was the question actually asking?"
+ *   decisiveWording    → "What specific wording decided the answer?"
+ *   whyYourAnswerMissed → "Why didn't my chosen option work?"
+ *   whatToLookFor      → "What should I watch for next time?"
  */
 export interface QuestionInterpretationBreakdown {
   /** The task the question actually set, restated plainly. */
@@ -48,7 +54,9 @@ export interface QuestionInterpretationBreakdown {
   decisiveWording: string;
   /**
    * Why the student's selection did not satisfy that task.
-   * null when no question context was available to explain a misread.
+   *
+   * null when no question context was available — we refuse to invent
+   * an explanation for a misreading we can't identify.
    */
   whyYourAnswerMissed: string | null;
   /** A transferable cue for reading similar UPSC questions correctly. */
@@ -56,9 +64,12 @@ export interface QuestionInterpretationBreakdown {
 }
 
 /**
- * Verification MCQ testing INTERPRETATION rather than recall of the original
- * answer. Structurally identical to the other executors' verification so it
- * flows through the same R3.3 endpoint and the same PracticeCard UI.
+ * Verification MCQ that tests whether the student can identify what a
+ * question is ASKING — testing INTERPRETATION, not recall of the original
+ * answer.
+ *
+ * Structurally identical to every other executor's verification, so it flows
+ * through the same R3.3 endpoint and PracticeCard UI without special-casing.
  */
 export interface QuestionInterpretationVerification {
   question: string;
@@ -67,11 +78,11 @@ export interface QuestionInterpretationVerification {
   explanation: string;
 }
 
-/** Complete question interpretation repair output. */
+/** Complete question interpretation repair output, ready for student consumption. */
 export interface QuestionInterpretationRepair {
   requestId: string;
   conceptId: string;
-  /** The student's original failure reason — preserved, never reinterpreted. */
+  /** The student's original failure reason — preserved exactly, never reinterpreted. */
   failureReason: "misunderstood_question";
   /** The repair intent — always "question_interpretation" for this executor. */
   repairIntent: "question_interpretation";
@@ -86,6 +97,18 @@ export interface QuestionInterpretationRepair {
 
 // ─── Zod Schema for AI Response Validation ──────────────────
 
+/**
+ * Validates the raw AI JSON response before it becomes a
+ * QuestionInterpretationRepair.
+ *
+ * Constraints are calibrated for UPSC-prep content:
+ *   - min(10) on required strings prevents hollow one-word answers
+ *   - min(5) on decisiveWording / explanation allows tight but meaningful text
+ *   - max limits cap runaway generation (800 for paragraphs, 1500 for MCQ stems)
+ *   - whyYourAnswerMissed uses .catch(null) so non-string values (e.g. a number
+ *     from a hallucinating model) degrade gracefully to null rather than
+ *     crashing the repair pipeline
+ */
 export const questionInterpretationResponseSchema = z.object({
   whatItAsked: z.string().min(10).max(800).trim(),
   decisiveWording: z.string().min(5).max(800).trim(),
@@ -108,27 +131,69 @@ type ValidatedResponse = z.infer<typeof questionInterpretationResponseSchema>;
 
 // ─── Prompt Construction ────────────────────────────────────
 
+/**
+ * System prompt for the question interpretation AI call.
+ *
+ * Organised into three sections for AI comprehension:
+ *   1. RESPONSE FORMAT — JSON-only output rules
+ *   2. CONTENT RULES — what each output field should contain, with
+ *      concrete good/bad examples to anchor generation quality
+ *   3. BOUNDARIES — hard prohibitions that prevent mode collapse
+ *      into concept reteaching
+ *
+ * The INTERPRETATION framing is the critical lever: every rule steers
+ * the AI away from knowledge remediation and toward question-reading
+ * intervention.
+ */
 const SYSTEM_PROMPT = `
 You are a focused UPSC question-reading coach.
 
 The student misread what a practice MCQ was ASKING. This is an interpretation
 failure, not necessarily a knowledge failure.
 
-STRICT RULES:
-1. Respond ONLY with valid JSON.
-2. No markdown.
-3. No conversational text.
-4. This is NOT a concept lesson. Do not explain the topic from scratch.
-5. Focus on the QUESTION: its task verb, qualifiers, negations, "except"/"not", scope limiters, and option framing.
-6. Quote or name the exact wording that decided the answer.
-7. Explain why the student's chosen option failed the TASK, not why the topic is important.
-8. "whatToLookFor" must be a transferable reading cue, not a fact about this topic.
-9. The verification question MUST test INTERPRETATION — whether the student can identify what a question is asking — not recall of the original answer.
-10. All distractors in the verification must be plausible.
-11. Do NOT invent constitutional articles, committee names, schemes, or facts.
+RESPONSE FORMAT:
+1. Respond ONLY with valid JSON. No markdown, no prose, no code fences.
+
+CONTENT RULES:
+2. "whatItAsked" — Restate the question's actual task in plain terms.
+   Focus on the task verb and what it requires.
+   Bad: "It asked about Article 19."
+   Good: "It asked which listed ground is NOT permitted under Article 19(2) — an exception question requiring you to find the odd one out."
+3. "decisiveWording" — Quote or name the exact qualifier, negation, scope limiter
+   or framing that decided the answer. This is NOT a concept lesson. Do not explain the topic from scratch.
+4. "whyYourAnswerMissed" — Explain why the student's chosen option failed the
+   TASK, not why the topic is important.
+   Bad: "Article 19 is important for fundamental rights."
+   Good: "Option b (public order) IS a listed ground, so it answers 'which is valid' — the opposite of what was asked."
+   Set to null ONLY when no question context is provided.
+5. "whatToLookFor" — A transferable reading cue, not a fact about this topic.
+   Bad: "Read the question more carefully."
+   Good: "Identify the task verb ('NOT', 'EXCEPT', 'All of the following') before reading options."
+6. Focus on the QUESTION: its task verb, qualifiers, negations, "except"/"not",
+   scope limiters, and option framing.
+7. The verification question MUST test INTERPRETATION — whether the student can
+   identify what a question is asking — not recall of the original answer.
+   All distractors must be plausible at UPSC level.
+
+BOUNDARIES:
+8. This is NOT a concept lesson. Do not explain the topic from scratch.
+9. Do NOT diagnose the student. Never claim they "don't understand the concept",
+   "have forgotten it", or have any kind of knowledge gap.
+10. Do NOT fabricate constitutional articles, committee names, schemes, or facts.
+11. Maintain UPSC-level factual accuracy throughout.
 12. Be precise and accurate — UPSC-level correctness is required.
 `;
 
+/**
+ * Builds the user-facing prompt with concept metadata and question context.
+ *
+ * Two modes:
+ *   - With question context → anchored to the specific failed question, with
+ *     the student's misread selection and the correct answer shown explicitly
+ *   - Without question context → addresses how questions on this concept are
+ *     typically framed, with an explicit prohibition against inventing a
+ *     misreading that never happened
+ */
 function buildUserPrompt(
   conceptName: string,
   subject: string,
@@ -200,7 +265,7 @@ Respond in this EXACT JSON format:
 
 // ─── Executor Input ─────────────────────────────────────────
 
-/** Mirrors the sibling executors' input so the API route treats all alike. */
+/** Mirrors the sibling executors' input shape so the API route treats all alike. */
 export interface QuestionInterpretationInput {
   request: RepairRequest;
   conceptName: string;
@@ -213,6 +278,11 @@ export interface QuestionInterpretationInput {
 /**
  * Execute a question interpretation repair.
  *
+ * Flow: guard → prompt → AI call → validate → transform
+ *
+ * The guard fires before the AI call, ensuring we never burn tokens
+ * on a request that was mis-routed to this executor.
+ *
  * @param input - RepairRequest + concept metadata
  * @returns QuestionInterpretationRepair ready for student consumption
  * @throws Error if the intent is wrong, the AI call fails, or validation fails
@@ -222,7 +292,8 @@ export async function executeQuestionInterpretation(
 ): Promise<QuestionInterpretationRepair> {
   const { request, conceptName, conceptSubject, conceptKeywords } = input;
 
-  // Guard: only handle question_interpretation intent
+  // ── Intent guard ──────────────────────────────────────
+  // Fires before the AI call so we never waste tokens on a mis-routed request.
   if (request.repairIntent !== "question_interpretation") {
     throw new Error(
       `QuestionInterpretationExecutor only handles "question_interpretation" intent, ` +
@@ -230,6 +301,7 @@ export async function executeQuestionInterpretation(
     );
   }
 
+  // ── Build prompt and call AI ──────────────────────────
   const userPrompt = buildUserPrompt(
     conceptName,
     conceptSubject,
@@ -245,6 +317,7 @@ export async function executeQuestionInterpretation(
     format: "json",
   });
 
+  // ── Validate AI response against schema ───────────────
   const validation = validateAIResponse(
     aiResponse.content,
     questionInterpretationResponseSchema,
@@ -258,6 +331,7 @@ export async function executeQuestionInterpretation(
 
   const data: ValidatedResponse = validation.data;
 
+  // ── Transform validated data into the repair output ───
   return {
     requestId: request.requestId,
     conceptId: request.conceptId,
