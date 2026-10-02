@@ -310,12 +310,21 @@ export const questionIntelligenceService = {
       stripped: stats.totalSanitized,
     });
 
+    // ─── Assign stable questionId to each MCQ (R1.2) ────
+    // ADR-002: Each MCQ gets a UUID for stable identity across
+    // regeneration. Injected post-validation, pre-persistence.
+    // Existing MCQs without questionId remain valid as legacy.
+    const prelimsWithIds = prelims.map((mcq) => ({
+      ...mcq,
+      questionId: crypto.randomUUID(),
+    }));
+
     // ─── Persist ─────────────────────────────────────────
     console.log("[QUESTIONS] STEP 5: Persisting");
 
     const questions = await conceptQuestionsRepository.upsert({
       conceptId: params.conceptId,
-      prelimsMcqs: prelims,
+      prelimsMcqs: prelimsWithIds,
       mainsQuestions: mains,
       interviewPrompts: interview,
       generationConfidence: String(aiResult.confidence),

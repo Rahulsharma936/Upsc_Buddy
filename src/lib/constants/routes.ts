@@ -18,6 +18,7 @@ export const ROUTES = {
   PRACTICE: "/dashboard/practice",
   REVISION: "/dashboard/revision",
   INSIGHTS: "/dashboard/insights",
+  DIAGNOSTIC: "/dashboard/diagnostic",
   ONBOARDING: "/onboarding",
 
   // Legacy aliases (backward compat — redirect to Knowledge)
@@ -53,6 +54,7 @@ export const PROTECTED_ROUTES = [
   ROUTES.PRACTICE,
   ROUTES.REVISION,
   ROUTES.INSIGHTS,
+  ROUTES.DIAGNOSTIC,
   ROUTES.ONBOARDING,
 ] as const;
 

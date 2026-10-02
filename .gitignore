@@ -55,3 +55,4 @@ query_users.js
 reset_passwords.js
 *.scratch.*
 .next_log.txt
+.Notes.txt

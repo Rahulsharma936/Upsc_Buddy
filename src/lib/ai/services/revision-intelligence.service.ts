@@ -84,6 +84,15 @@ export const revisionIntelligenceService = {
     eventType: "review" | "mcq_attempt" | "self_assessment";
     mcqCorrect?: boolean;
     mcqQuestionIndex?: number;
+    // R1.2 MCQ evidence — optional, does NOT affect SM-2
+    mcqQuestionId?: string;
+    selectedAnswer?: string;
+    correctAnswer?: string;
+    confidence?: number;
+    // R1.3 Revision evidence — raw self-assessment, separate from derived quality
+    selfAssessment?: "remembered" | "partially" | "forgot";
+    // Post-R2: student's authoritative failure reason for wrong MCQ
+    failureReason?: string;
   }): Promise<{
     mastery: ConceptMasteryRecord;
     nextReviewAt: Date;
@@ -101,8 +110,26 @@ export const revisionIntelligenceService = {
       ? hydrateMasteryState(existing)
       : initializeMastery();
 
-    // Calculate next state
+    // Calculate next state — SM-2 only sees quality, NOT confidence/selectedAnswer/selfAssessment
     const result = calculateNextState(currentState, params.quality);
+
+    // Build eventMetadata — existing SM-2 transition fields + R1.2/R1.3 evidence
+    const eventMetadata: Record<string, unknown> = {
+      previousInterval: currentState.intervalDays,
+      newInterval: result.intervalDays,
+      previousEase: currentState.easeFactor,
+      newEase: result.nextState.easeFactor,
+    };
+
+    // R1.2: Additive MCQ evidence — only included when present
+    if (params.mcqQuestionId !== undefined) eventMetadata.questionId = params.mcqQuestionId;
+    if (params.selectedAnswer !== undefined) eventMetadata.selectedAnswer = params.selectedAnswer;
+    if (params.correctAnswer !== undefined) eventMetadata.correctAnswer = params.correctAnswer;
+    if (params.confidence !== undefined) eventMetadata.confidence = params.confidence;
+    // R1.3: Raw revision self-assessment — stored separately from derived SM-2 quality
+    if (params.selfAssessment !== undefined) eventMetadata.selfAssessment = params.selfAssessment;
+    // Post-R2: Student's authoritative failure reason — stored for R3 consumption
+    if (params.failureReason !== undefined) eventMetadata.failureReason = params.failureReason;
 
     // Log event
     await revisionRepository.logEvent({
@@ -112,12 +139,7 @@ export const revisionIntelligenceService = {
       qualityRating: params.quality,
       mcqCorrect: params.mcqCorrect,
       mcqQuestionIndex: params.mcqQuestionIndex,
-      eventMetadata: {
-        previousInterval: currentState.intervalDays,
-        newInterval: result.intervalDays,
-        previousEase: currentState.easeFactor,
-        newEase: result.nextState.easeFactor,
-      },
+      eventMetadata,
     });
 
     // Persist mastery state

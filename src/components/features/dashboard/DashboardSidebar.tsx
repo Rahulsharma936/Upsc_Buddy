@@ -27,6 +27,7 @@ import {
   Swords,
   RotateCcw,
   BarChart3,
+  Stethoscope,
   LogOut,
   Menu,
   X,
@@ -47,6 +48,12 @@ const navSections = [
       { label: "Practice", href: ROUTES.PRACTICE, icon: Swords },
       { label: "Revision", href: ROUTES.REVISION, icon: RotateCcw },
       { label: "Insights", href: ROUTES.INSIGHTS, icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Repair",
+    items: [
+      { label: "Diagnostic", href: ROUTES.DIAGNOSTIC, icon: Stethoscope },
     ],
   },
 ];

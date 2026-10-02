@@ -38,6 +38,8 @@ export interface MasterySignal {
   confidenceScore: number;
   nextReviewAt: Date | null;
   daysOverdue: number;
+  /** Total MCQ attempts (correct + incorrect). Used for question rotation offset. */
+  totalAttempts: number;
 }
 
 export type SurfaceReason =
@@ -113,6 +115,32 @@ const PRIORITY_WEIGHTS = {
   deferred: 40,
   subject_balance: 30,
 };
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// QUESTION ROTATION
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * Select a rotated subset from a question array.
+ * Uses an offset (derived from attempt count) to cycle through
+ * questions sequentially across sessions.
+ *
+ * Example: arr=[A,B,C,D,E], budget=2, offset=4
+ *   → start = 4 % 5 = 4
+ *   → returns [E, A] (wraps around)
+ *
+ * Guarantees every question eventually surfaces.
+ */
+function rotateSlice<T>(arr: T[], budget: number, offset: number): T[] {
+  if (arr.length === 0 || budget <= 0) return [];
+  const count = Math.min(budget, arr.length);
+  const start = offset % arr.length;
+  const result: T[] = [];
+  for (let i = 0; i < count; i++) {
+    result.push(arr[(start + i) % arr.length]);
+  }
+  return result;
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SURFACING ENGINE
@@ -192,16 +220,20 @@ export function computeDailyPractice(params: {
     // Skip if nothing left to budget
     if (mcqBudget <= 0 && mainsBudget <= 0 && interviewBudget <= 0) continue;
 
+    // Rotation offset: use total MCQ attempts to cycle through questions
+    const conceptMastery = masteryMap.get(item.inventory.conceptId);
+    const rotationOffset = conceptMastery?.totalAttempts ?? 0;
+
     selected.push({
       conceptId: item.inventory.conceptId,
       conceptName: item.inventory.conceptName,
       subject: item.inventory.subject,
       reason: item.reason,
       priorityScore: item.score,
-      // Select only the budgeted subset (first N from inventory)
-      prelimsMcqs: item.inventory.prelimsMcqs.slice(0, mcqBudget),
-      mainsQuestions: item.inventory.mainsQuestions.slice(0, mainsBudget),
-      interviewPrompts: item.inventory.interviewPrompts.slice(0, interviewBudget),
+      // Rotate through inventory based on attempt count
+      prelimsMcqs: rotateSlice(item.inventory.prelimsMcqs, mcqBudget, rotationOffset),
+      mainsQuestions: rotateSlice(item.inventory.mainsQuestions, mainsBudget, rotationOffset),
+      interviewPrompts: rotateSlice(item.inventory.interviewPrompts, interviewBudget, rotationOffset),
     });
 
     totalMcqs += mcqBudget;

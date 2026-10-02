@@ -134,6 +134,7 @@ export async function GET(request: NextRequest) {
           confidenceScore: Number(m.confidenceScore),
           nextReviewAt: nextReview,
           daysOverdue,
+          totalAttempts: m.correctCount + m.incorrectCount,
         };
       });
     } catch {

@@ -3,7 +3,7 @@
  * Phase 3C: Persistence for concept mastery state + revision events.
  */
 
-import { eq, and, lte, asc, desc } from "drizzle-orm";
+import { eq, and, lte, asc, desc, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { conceptMastery, revisionEvents } from "@/lib/db/schema";
 import type {
@@ -119,6 +119,54 @@ export const revisionRepository = {
     return inserted[0];
   },
 
+  /**
+   * R3.3: Find an existing repair event of a given type for an R3.1 requestId.
+   *
+   * All R3 events carry the originating requestId in their JSONB metadata, so
+   * one lookup serves every stage of the repair loop (`repair_verification`,
+   * `repair_understanding`, and whatever R3.4 adds).
+   *
+   * Two uses:
+   *   - Idempotency — a stage runs once per repair; a duplicate submit returns
+   *     the original event instead of appending a second one.
+   *   - Server-side derivation — a later stage reads the facts an earlier stage
+   *     already recorded rather than trusting the client for them.
+   *
+   * Always scoped to the user, so one user's requestId can never mask or
+   * expose another's.
+   */
+  async findRepairEventByRequestId(
+    userId: string,
+    eventType: string,
+    requestId: string
+  ): Promise<RevisionEventRecord | undefined> {
+    const result = await db
+      .select()
+      .from(revisionEvents)
+      .where(
+        and(
+          eq(revisionEvents.userId, userId),
+          eq(revisionEvents.eventType, eventType),
+          sql`${revisionEvents.eventMetadata} ->> 'requestId' = ${requestId}`
+        )
+      )
+      .limit(1);
+    return result[0];
+  },
+
+  /**
+   * R3.3: Find an existing repair_verification event for a given R3.1 requestId.
+   *
+   * Unchanged behaviour — kept as the named entry point for the verification
+   * stage; delegates to the generalized lookup above.
+   */
+  async findRepairVerification(
+    userId: string,
+    requestId: string
+  ): Promise<RevisionEventRecord | undefined> {
+    return this.findRepairEventByRequestId(userId, "repair_verification", requestId);
+  },
+
   /** Get recent events for a concept. */
   async getRecentEvents(
     userId: string,
@@ -156,5 +204,47 @@ export const revisionRepository = {
         (m) => m.nextReviewAt && m.nextReviewAt <= now
       ).length,
     };
+  },
+
+  // ─── R1.4: Evidence Retrieval for R2 ─────────────────────
+
+  /**
+   * Get chronological event history for a specific concept.
+   * Returns events in ASC order (oldest first) for trajectory analysis.
+   * R2 uses this to reconstruct learning sequences per concept.
+   */
+  async getConceptHistory(
+    userId: string,
+    conceptId: string,
+    limit = 100
+  ): Promise<RevisionEventRecord[]> {
+    return db
+      .select()
+      .from(revisionEvents)
+      .where(
+        and(
+          eq(revisionEvents.userId, userId),
+          eq(revisionEvents.conceptId, conceptId)
+        )
+      )
+      .orderBy(asc(revisionEvents.createdAt))
+      .limit(limit);
+  },
+
+  /**
+   * Get chronological event history across ALL concepts for a user.
+   * Returns events in ASC order (oldest first).
+   * R2 uses this for cross-concept pattern analysis.
+   */
+  async getEventsByUser(
+    userId: string,
+    limit = 200
+  ): Promise<RevisionEventRecord[]> {
+    return db
+      .select()
+      .from(revisionEvents)
+      .where(eq(revisionEvents.userId, userId))
+      .orderBy(asc(revisionEvents.createdAt))
+      .limit(limit);
   },
 };

@@ -8,7 +8,14 @@
  *
  * POST /api/revision
  *   Record a review event or skip.
- *   Body: { conceptId, action: "review"|"skip"|"mcq_attempt", quality?, mcqCorrect?, mcqQuestionIndex? }
+ *   Body: { conceptId, action: "review"|"skip"|"mcq_attempt"|"self_assessment",
+ *           quality?, mcqCorrect?, mcqQuestionIndex?,
+ *           mcqQuestionId?, selectedAnswer?, correctAnswer?, confidence?,
+ *           selfAssessment?, failureReason? }
+ *   R1.2: mcqQuestionId/selectedAnswer/correctAnswer/confidence are optional MCQ evidence.
+ *   R1.3: selfAssessment is optional revision evidence ("remembered"|"partially"|"forgot").
+ *   Post-R2: failureReason is student's authoritative cause for wrong MCQ.
+ *         All evidence flows into eventMetadata but does NOT affect SM-2 quality.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -107,7 +114,15 @@ export async function POST(request: NextRequest) {
     if (!user) return errorResponse("Unauthorized", 401);
 
     const body = await request.json();
-    const { conceptId, action, quality, mcqCorrect, mcqQuestionIndex } = body;
+    const {
+      conceptId, action, quality, mcqCorrect, mcqQuestionIndex,
+      // R1.2 MCQ evidence — all optional, backwards-compatible
+      mcqQuestionId, selectedAnswer, correctAnswer, confidence,
+      // R1.3 Revision evidence — optional
+      selfAssessment,
+      // Post-R2: student's authoritative failure reason for wrong MCQ
+      failureReason,
+    } = body;
 
     if (!conceptId || typeof conceptId !== "string") {
       return errorResponse("conceptId is required");
@@ -151,6 +166,16 @@ export async function POST(request: NextRequest) {
       eventType: action as "review" | "mcq_attempt" | "self_assessment",
       mcqCorrect,
       mcqQuestionIndex,
+      // R1.2: Forward MCQ evidence — these are optional and
+      // do NOT affect SM-2 quality. Stored in eventMetadata only.
+      mcqQuestionId,
+      selectedAnswer,
+      correctAnswer,
+      confidence,
+      // R1.3: Forward revision self-assessment evidence
+      selfAssessment,
+      // Post-R2: Forward failure reason evidence
+      failureReason,
     });
 
     return NextResponse.json({
