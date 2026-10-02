@@ -47,5 +47,30 @@
      - R3.5 Active Recall ✅
      - R3.8 Calibration (Exists, needs quality check)
      - R3.9 Error Awareness ✅ (Rewritten today)
-   - **NEXT TASK**: The next concrete task is to focus on **R3.6 (Question Interpretation)** and **R3.7 (Uncertainty Resolution)**. (The files exist but likely need the same quality-assurance rewrite that R3.9 just received).
-   - After R3.6 and R3.7, we need to address R3.10 (Clarification) before moving to the frontend.
+## Session 3: Massive Commit & QA Rewrite of R3.6, R3.7, and R3.8
+- **Date**: 2026-10-02
+- **Objective**: Commit entire pending system state, execute gold-standard QA rewrite for R3.6, R3.7, and R3.8 executors, and harmonize repair test suites.
+
+### Key Discussions & Findings
+1. **Committed Entire System Base**:
+   - Committed 67 files (19,469 insertions) covering Diagnostic Engine, Evidence Layer, Repair Engine (R3.1 - R3.9), UI overhauls (PracticeCard, RevisionList), and architectural docs.
+2. **QA Rewrite to Gold Standard (R3.9 parity)**:
+   - **R3.6 Question Interpretation** (`question-interpretation.executor.ts`): Re-engineered system prompt into `RESPONSE FORMAT`, `CONTENT RULES` (with concrete good/bad reading-cue examples), and `BOUNDARIES`. Added pedagogical JSDoc mapping fields to student questions.
+   - **R3.7 Uncertainty Resolution** (`uncertainty-resolution.executor.ts`): Re-engineered system prompt with strict no-diagnosis enforcement and actionable discrimination rules. Added student-inquiry JSDoc.
+   - **R3.8 Calibration** (`calibration.executor.ts`): Re-engineered system prompt with mismatch-focused framing, self-check examples, and graceful `.catch(null)` schema degradation.
+3. **Test Suite Harmonization**:
+   - Updated `question-interpretation.test.ts` and `repair-verification.test.ts` to recognize all 6 active verifiable executors (`concept_teaching`, `active_recall`, `question_interpretation`, `uncertainty_resolution`, `calibration`, `error_awareness`).
+   - Ran all 10 deterministic test suites: **100% passing across all 10 suites**.
+   - Cleanly committed to Git.
+
+### Current State & Next Steps (Ready for "continue")
+- All 6 backend executors (R3.2a, R3.5, R3.6, R3.7, R3.8, R3.9) are complete, gold-standard, and passing tests.
+- **IMMEDIATE NEXT TASK**: Build **R3.10 — Clarification Repair Executor**
+  - Failure reason: `not_sure`
+  - Repair intent: `clarification`
+  - Purpose: When a student didn't understand why the question was asking what it was asking, or felt unequipped to even attempt it, surface the prerequisite clarity and context without overwhelming them.
+  - Implement:
+    1. `src/lib/repair/clarification.executor.ts` (follow R3.9 gold-standard template)
+    2. `src/lib/repair/__tests__/clarification.test.ts`
+    3. Wire into `/api/repair/route.ts` and add `clarification` to `VERIFIABLE_REPAIR_INTENTS` in `repair-verification.ts`.
+- After R3.10: The backend repair engine is 100% complete across all 7 failure reasons. Next will be integrating Repair into the frontend Practice & Revision flows!
