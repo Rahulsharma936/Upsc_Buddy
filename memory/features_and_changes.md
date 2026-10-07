@@ -118,9 +118,36 @@ All 10 repair test suites passing:
 
 ---
 
+## [Entry 006] R3.10 — Clarification Repair Executor
+- **Date**: 2026-10-07
+- **Type**: Feature / Repair Engine
+
+### What We Did
+Built the clarification executor that handles `failureReason = "not_sure"`. This handles cases where the student doesn't know what went wrong.
+
+### Why
+We needed a way to support students who are stuck without assuming a specific gap or reteaching a concept they might already know. This executor helps the student discover their own difficulty.
+
+### How It Works
+1. `not_sure` → maps to `clarification` intent.
+2. [`clarification.executor.ts`](../src/lib/repair/clarification.executor.ts) generates a `ClarificationBreakdown`:
+   - `whatTheQuestionNeeded` — neutral prerequisite knowledge context
+   - `possibleStumblingPoints` — 2-3 concrete places to get stuck
+   - `howToNarrowItDown` — self-diagnostic procedure
+   - `nextTimeStrategy` — general approach strategy
+3. **Unique feature**: `verificationRequired = false`. It deliberately returns `verification: null` because we cannot verify remediation of an unknown gap.
+4. Wired into [`/api/repair`](../src/app/api/repair/route.ts).
+
+### Files Changed
+- **Created**: `src/lib/repair/clarification.executor.ts`, `src/lib/repair/__tests__/clarification.test.ts`
+- **Modified**: `src/app/api/repair/route.ts`, `src/lib/repair/__tests__/question-interpretation.test.ts`
+
+### Validation
+- 163/163 test assertions passed for clarification.
+- All 11 repair test suites passing.
+
+---
+
 ### Next Concrete Steps (recorded for handoff)
-The next task for any agent picking up this conversation is to implement **R3.10 — Clarification Repair Executor** (`failureReason = "not_sure"` → `repairIntent = "clarification"`).
-1. Create `src/lib/repair/clarification.executor.ts` following the R3.9 gold-standard template.
-2. Create deterministic test suite `src/lib/repair/__tests__/clarification.test.ts`.
-3. Wire into `src/app/api/repair/route.ts` and add `"clarification"` to `VERIFIABLE_REPAIR_INTENTS` in `src/lib/repair/repair-verification.ts`.
-4. Run all test suites to confirm full 7/7 executor completion.
+The next task for any agent picking up this conversation is to integrate the Repair Engine into the frontend Practice & Revision flows! 
+With all 7 backend executors complete, the UI can now consume `/api/repair` when a user answers incorrectly and seamlessly handle the repair generation and verification loop.

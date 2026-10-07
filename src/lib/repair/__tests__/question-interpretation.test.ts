@@ -378,13 +378,18 @@ async function section5() {
   const missing = await callRepair({ conceptId: CONCEPT_ID, failureReason: "misunderstood_question" });
   assert(missing.status === 404, "5m: missing concept rejected with 404");
 
-  // An intent with no executor still reports itself as unimplemented.
-  // (careless_mistake is now implemented via R3.9; use not_sure → clarification instead)
+  // not_sure → clarification is now implemented via R3.10.
+  // All 7 failure reasons now have executors — verify clarification works through the route.
   routeState.concept = { userId: "user-1", name: "x", displayName: "X", subject: "Polity", keywords: [] };
-  resetAI();
-  const notImpl = await callRepair({ conceptId: CONCEPT_ID, failureReason: "not_sure" });
-  assert(notImpl.status === 200, "5n: unimplemented intent still returns 200");
-  assert(notImpl.json.data?.["repair"] === null, "5o: unimplemented intent returns a null repair");
+  resetAI({
+    whatTheQuestionNeeded: "This question required basic knowledge of the topic.",
+    possibleStumblingPoints: ["The question may have had confusing wording.", "The options may have looked similar."],
+    howToNarrowItDown: "Try to identify whether you lacked knowledge or misread the question.",
+    nextTimeStrategy: "Read each option carefully and eliminate one at a time.",
+  });
+  const clarification = await callRepair({ conceptId: CONCEPT_ID, failureReason: "not_sure" });
+  assert(clarification.status === 200, "5n: clarification intent returns 200");
+  assert(clarification.json.data?.["repair"] !== null, "5o: clarification returns a real repair (R3.10)");
 
   console.log("  ✓ /api/repair routes misunderstood_question to R3.6");
 }

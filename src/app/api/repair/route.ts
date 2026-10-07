@@ -3,16 +3,16 @@
  *
  * POST /api/repair
  *   Body: { conceptId, failureReason, questionContext? }
- *   Orchestrates: R3.1 (RepairRequest) → R3.2 (Executor) → ConceptTeachingRepair
+ *   Orchestrates: R3.1 (RepairRequest) → R3.2 (Executor) → Repair
  *
- * Handles the failure reasons that have an executor:
+ * Handles ALL failure reasons — every one has an executor:
  *   concept_not_understood → concept_teaching       (R3.2a)
  *   could_not_recall       → active_recall          (R3.5)
  *   misunderstood_question → question_interpretation (R3.6)
  *   guessed                → uncertainty_resolution  (R3.7)
  *   overconfident           → calibration            (R3.8)
  *   careless_mistake        → error_awareness         (R3.9)
- * Other repair intents will be added in subsequent R3.2 tasks.
+ *   not_sure                → clarification           (R3.10)
  *
  * Does NOT modify SM-2, mastery, or any existing learning system.
  */
@@ -31,6 +31,7 @@ import { executeQuestionInterpretation } from "@/lib/repair/question-interpretat
 import { executeUncertaintyResolution } from "@/lib/repair/uncertainty-resolution.executor";
 import { executeCalibration } from "@/lib/repair/calibration.executor";
 import { executeErrorAwareness } from "@/lib/repair/error-awareness.executor";
+import { executeClarification } from "@/lib/repair/clarification.executor";
 import type { FailureReason } from "@/lib/evidence/evidence.types";
 
 function errorResponse(message: string, status = 400) {
@@ -78,7 +79,8 @@ export async function POST(request: NextRequest) {
       repairRequest.repairIntent === "question_interpretation" ||
       repairRequest.repairIntent === "uncertainty_resolution" ||
       repairRequest.repairIntent === "calibration" ||
-      repairRequest.repairIntent === "error_awareness"
+      repairRequest.repairIntent === "error_awareness" ||
+      repairRequest.repairIntent === "clarification"
     ) {
       // Look up concept metadata
       const concept = await conceptRepository.findById(conceptId);
@@ -199,8 +201,28 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Execute error awareness repair (R3.9)
-      const repair = await executeErrorAwareness(executorInput);
+      if (repairRequest.repairIntent === "error_awareness") {
+        // Execute error awareness repair (R3.9)
+        const repair = await executeErrorAwareness(executorInput);
+
+        return NextResponse.json({
+          success: true,
+          data: {
+            repair: {
+              requestId: repair.requestId,
+              conceptId: repair.conceptId,
+              failureReason: repair.failureReason,
+              repairIntent: repair.repairIntent,
+              breakdown: repair.breakdown,
+              verification: repair.verification,
+              status: repair.status,
+            },
+          },
+        });
+      }
+
+      // Execute clarification repair (R3.10)
+      const repair = await executeClarification(executorInput);
 
       return NextResponse.json({
         success: true,
@@ -218,15 +240,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Other intents not yet implemented
+    // All 7 failure reasons are now handled — this should never be reached.
+    // Kept as a defensive fallback in case a new failure reason is added
+    // to the mapping without a corresponding executor.
     return NextResponse.json({
       success: true,
       data: {
         repair: null,
-        message: `Repair intent "${repairRequest.repairIntent}" is not yet implemented. ` +
-          `Available: "concept_teaching" (R3.2a), "active_recall" (R3.5), ` +
-          `"question_interpretation" (R3.6), "uncertainty_resolution" (R3.7), ` +
-          `"calibration" (R3.8), "error_awareness" (R3.9).`,
+        message: `Repair intent "${repairRequest.repairIntent}" is not yet implemented.`,
         repairRequest: {
           requestId: repairRequest.requestId,
           failureReason: repairRequest.failureReason,
