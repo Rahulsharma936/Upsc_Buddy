@@ -148,6 +148,25 @@ We needed a way to support students who are stuck without assuming a specific ga
 
 ---
 
+## [Entry 007] Frontend Repair UI Architecture & Planning
+- **Date**: 2026-10-07
+- **Type**: Architecture / Planning
+
+### What We Did
+Researched the frontend `PracticeCard.tsx` and `RevisionList.tsx` components and mapped out exactly how to integrate the completed Repair Engine backend. Produced a detailed implementation plan.
+
+### Why
+To ensure a structured, two-phase approach to wiring up the UI:
+1. Extending Practice to handle the 3 remaining failure reasons (`overconfident`, `careless_mistake`, `not_sure`).
+2. Integrating the complete repair lifecycle into the Revision flow when students mark a concept as "Forgot".
+
+### Validation
+- Validated that `not_sure` (Clarification Executor) correctly handles `verification: null`.
+- Validated state management patterns across the components.
+
+---
+
 ### Next Concrete Steps (recorded for handoff)
-The next task for any agent picking up this conversation is to integrate the Repair Engine into the frontend Practice & Revision flows! 
-With all 7 backend executors complete, the UI can now consume `/api/repair` when a user answers incorrectly and seamlessly handle the repair generation and verification loop.
+The next agent should begin executing the UI Integration Plan:
+1. Open `PracticeCard.tsx` and implement the 3 missing failure reasons and their UI blocks.
+2. Open `RevisionList.tsx` and implement the repair CTA flow for "Forgot" and "Partially" assessments.

@@ -79,7 +79,21 @@
    - The backend repair engine is now 100% complete across all 7 failure reasons.
    - All 11 test suites passing perfectly.
 
+## Session 5: Repair UI Integration Planning & Architecture
+- **Date**: 2026-10-07
+- **Objective**: Design the implementation plan for integrating the completed R3 backend into the frontend Practice & Revision flows.
+
+### Key Discussions & Findings
+1. **Frontend Architecture Research**:
+   - Analyzed `PracticeCard.tsx` and `RevisionList.tsx`.
+   - Practice flow currently has UI implementations for only 4 out of the 7 failure reasons.
+   - Revision flow currently has **no repair integration**; when a student marks "Forgot", the item is just silently rescheduled by SM-2.
+   
+2. **Implementation Plan Finalized**:
+   - **Phase 1 (Practice Flow)**: Update `PracticeCard.tsx` to handle the 3 missing failure reasons (`overconfident`, `careless_mistake`, `not_sure`). This requires mapping the new type interfaces (`CalibrationRepairData`, `ErrorAwarenessRepairData`, `ClarificationRepairData`) and specially handling `not_sure` (which returns `verification: null`).
+   - **Phase 2 (Revision Flow)**: Add the repair lifecycle (button CTA, fetching repair, verification MCQ, self-report) to `RevisionList.tsx`. When a user clicks "Forgot" or "Partially", offer an optional repair CTA alongside the standard skip behavior.
+
 ### Current State & Next Steps (Ready for "continue")
-- All 7 backend executors (R3.2a, R3.5, R3.6, R3.7, R3.8, R3.9, R3.10) are complete, gold-standard, and passing tests.
-- **IMMEDIATE NEXT TASK**: Integrate Repair into the frontend Practice & Revision flows!
-  - Now that the backend can handle any failure reason and generate an appropriate, verifiable repair, the UI needs to actually surface this when a user gets an MCQ wrong during Practice or Revision.
+- All 7 backend executors are complete and passing tests.
+- We have a fully mapped implementation plan for the frontend UI.
+- **IMMEDIATE NEXT TASK**: Execute the Phase 1 and Phase 2 frontend integration plan. The next agent should read the plan above and start modifying `PracticeCard.tsx` and `RevisionList.tsx`.
