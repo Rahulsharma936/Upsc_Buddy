@@ -30,6 +30,9 @@ import {
   Brain,
   Search,
   Scale,
+  Target,
+  Compass,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -187,11 +190,51 @@ interface UncertaintyResolutionRepairData extends RepairCommon {
   };
 }
 
+/** R3.8 — the student was confident but wrong. */
+interface CalibrationRepairData extends RepairCommon {
+  repairIntent: "calibration";
+  breakdown: {
+    whatYouBelieved: string;
+    whatWasActuallyCorrect: string;
+    whereConfidenceBroke: string | null;
+    selfCheck: string;
+  };
+}
+
+/** R3.9 — the student made a careless/process mistake. */
+interface ErrorAwarenessRepairData extends RepairCommon {
+  repairIntent: "error_awareness";
+  breakdown: {
+    whatWasOverlooked: string;
+    theTrap: string;
+    checkingStep: string | null;
+    patternAwareness: string;
+  };
+}
+
+/** R3.10 — the student doesn't know what went wrong. No verification. */
+interface ClarificationRepairData {
+  requestId: string;
+  conceptId: string;
+  failureReason: string;
+  repairIntent: "clarification";
+  breakdown: {
+    whatTheQuestionNeeded: string;
+    possibleStumblingPoints: string[];
+    howToNarrowItDown: string | null;
+    nextTimeStrategy: string;
+  };
+  verification: null;
+}
+
 type RepairData =
   | ConceptTeachingRepairData
   | ActiveRecallRepairData
   | QuestionInterpretationRepairData
-  | UncertaintyResolutionRepairData;
+  | UncertaintyResolutionRepairData
+  | CalibrationRepairData
+  | ErrorAwarenessRepairData
+  | ClarificationRepairData;
 
 /** Header shown at the top of the repair card, per repair mode. */
 const REPAIR_MODES = {
@@ -199,6 +242,9 @@ const REPAIR_MODES = {
   active_recall: { icon: Brain, title: "Try to Recall This" },
   question_interpretation: { icon: Search, title: "What This Question Asked" },
   uncertainty_resolution: { icon: Scale, title: "How To Choose Confidently" },
+  calibration: { icon: Target, title: "Confidence Check" },
+  error_awareness: { icon: AlertTriangle, title: "What Was Overlooked" },
+  clarification: { icon: Compass, title: "Finding What Went Wrong" },
 } as const;
 
 /** One labelled block inside the repair card. */
@@ -250,6 +296,36 @@ function repairBlocks(repair: RepairData): RepairBlock[] {
           : []),
         { label: "How To Decide Next Time", text: repair.breakdown.howToDecide },
       ];
+    case "calibration":
+      return [
+        { label: "What You Believed", text: repair.breakdown.whatYouBelieved },
+        { label: "What Was Actually Correct", text: repair.breakdown.whatWasActuallyCorrect },
+        ...(repair.breakdown.whereConfidenceBroke
+          ? [{ label: "Where Confidence Broke", text: repair.breakdown.whereConfidenceBroke }]
+          : []),
+        { label: "Self-Check For Next Time", text: repair.breakdown.selfCheck },
+      ];
+    case "error_awareness":
+      return [
+        { label: "What Was Overlooked", text: repair.breakdown.whatWasOverlooked },
+        { label: "The Trap", text: repair.breakdown.theTrap },
+        ...(repair.breakdown.checkingStep
+          ? [{ label: "Checking Step", text: repair.breakdown.checkingStep }]
+          : []),
+        { label: "Pattern To Watch For", text: repair.breakdown.patternAwareness },
+      ];
+    case "clarification":
+      return [
+        { label: "What The Question Needed", text: repair.breakdown.whatTheQuestionNeeded },
+        ...repair.breakdown.possibleStumblingPoints.map((point, i) => ({
+          label: `Possible Stumbling Point ${i + 1}`,
+          text: point,
+        })),
+        ...(repair.breakdown.howToNarrowItDown
+          ? [{ label: "How To Narrow It Down", text: repair.breakdown.howToNarrowItDown }]
+          : []),
+        { label: "Strategy For Next Time", text: repair.breakdown.nextTimeStrategy },
+      ];
   }
 }
 
@@ -272,6 +348,9 @@ const REPAIRABLE_FAILURE_REASONS = [
   "could_not_recall",
   "misunderstood_question",
   "guessed",
+  "overconfident",
+  "careless_mistake",
+  "not_sure",
 ] as const;
 
 /** The repair CTA speaks the student's own language for each reason. */
@@ -280,6 +359,9 @@ const REPAIR_CTA_LABEL: Record<string, string> = {
   could_not_recall: "Help me recall this",
   misunderstood_question: "Break down what this question asked",
   guessed: "Help me choose confidently next time",
+  overconfident: "Show me where my confidence was wrong",
+  careless_mistake: "Show me what I overlooked",
+  not_sure: "Help me figure out what went wrong",
 };
 
 export function PracticeCard({ data, mode }: PracticeCardProps) {
@@ -469,6 +551,10 @@ export function PracticeCard({ data, mode }: PracticeCardProps) {
     const repair = repairData[qIdx];
     if (!repair) return;
 
+    // Clarification repairs have verification: null — this handler is never
+    // called for them (no MCQ rendered), but TypeScript needs the narrowing.
+    if (!repair.verification) return;
+
     // Duplicate guard: one verification per repair, first answer wins.
     if (verificationAnswer[qIdx] || verificationSaving[qIdx]) return;
 
@@ -529,6 +615,10 @@ export function PracticeCard({ data, mode }: PracticeCardProps) {
   const handleUnderstandingSelect = (qIdx: number, value: PostRepairUnderstanding) => {
     const repair = repairData[qIdx];
     if (!repair) return;
+
+    // Clarification repairs skip verification entirely — this handler is
+    // unreachable for them, but TypeScript needs the narrowing.
+    if (!repair.verification) return;
 
     // Duplicate guard: one self-report per repair, first answer wins.
     if (understandingAnswer[qIdx] || understandingSaving[qIdx]) return;
@@ -844,10 +934,18 @@ export function PracticeCard({ data, mode }: PracticeCardProps) {
                             ))
                           )}
 
+                          {/* Clarification special case — no verification */}
+                          {repair.repairIntent === "clarification" && (
+                            <p className="mt-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-700 dark:text-blue-300">
+                              <Compass className="h-3.5 w-3.5 shrink-0" />
+                              Use these pointers to identify what specifically blocked you, then try a similar question.
+                            </p>
+                          )}
+
                           {/* ─── Verification MCQ (shared R3.3 mechanism) ──
                               For active recall it waits until the student has
                               actually attempted retrieval and seen the answer. */}
-                          {(repair.repairIntent !== "active_recall" || recallRevealed[idx]) && (
+                          {repair.verification && (repair.repairIntent !== "active_recall" || recallRevealed[idx]) && (
                           <div className="mt-2 rounded-md border border-blue-200/50 dark:border-blue-500/15 bg-white/50 dark:bg-blue-950/20 px-3 py-2.5">
                             <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-600/70 dark:text-blue-400/70 mb-2">Let&apos;s Check</p>
                             <p className="text-xs font-medium leading-relaxed mb-2">{repair.verification.question}</p>

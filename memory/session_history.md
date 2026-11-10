@@ -97,3 +97,95 @@
 - All 7 backend executors are complete and passing tests.
 - We have a fully mapped implementation plan for the frontend UI.
 - **IMMEDIATE NEXT TASK**: Execute the Phase 1 and Phase 2 frontend integration plan. The next agent should read the plan above and start modifying `PracticeCard.tsx` and `RevisionList.tsx`.
+
+---
+
+## Session 6: Recap & Orientation After 6-Day Gap
+- **Date**: 2026-10-15
+- **Objective**: Resume work after a break. Establish where we left off and what's next.
+
+### Where We Left Off (Summary of Sessions 1–5)
+
+**Project**: UPSC Buddy — an AI-powered UPSC exam preparation app built with **Next.js**, **Supabase**, **Drizzle ORM**, and **Groq API**.
+
+**Three Core Systems**:
+1. **Learning Engine** ✅ (SM-2 spaced repetition, MCQ practice, revision, insights) — fully built.
+2. **Diagnostic Engine** ✅ (4 gap types: Concept, Memory, Calibration, Revision) — fully built.
+3. **Repair Engine** ✅ backend, 🔧 frontend partially done.
+
+**Repair Engine Backend (100% Complete)**:
+All 7 failure reasons → 7 executors, all tested and passing (11 test suites):
+| Executor | Failure Reason | Status |
+|---|---|---|
+| R3.2a Concept Teaching | `concept_not_understood` | ✅ |
+| R3.5 Active Recall | `could_not_recall` | ✅ |
+| R3.6 Question Interpretation | `misread_question` | ✅ |
+| R3.7 Uncertainty Resolution | `eliminated_but_guessed` | ✅ |
+| R3.8 Calibration | `overconfident` | ✅ |
+| R3.9 Error Awareness | `careless_mistake` | ✅ |
+| R3.10 Clarification | `not_sure` | ✅ |
+
+**Frontend Integration (Complete ✅)**:
+- **Phase 1 — PracticeCard.tsx** ✅ DONE (Session 5/Entry 008): All 7 failure reasons now handled in the practice flow UI. Clarification's `verification: null` special case is handled.
+- **Phase 2 — RevisionList.tsx** ✅ DONE (Session 6/Entry 010): Full repair lifecycle wired into revision flow — CTA after "Forgot"/"Partially", repair fetch, verification MCQ, understanding self-report, and next-action routing.
+- **TS Cleanup** ✅ DONE (Session 7): Fixed 3 pre-existing null-check errors on `repair.verification` in PracticeCard.tsx. Project compiles with 0 TS errors.
+
+### Immediate Next Task
+**All repair UI integration is complete.** Both Practice and Revision flows have the full repair lifecycle. The entire project compiles clean (0 TS errors).
+
+---
+
+## Session 7: Diagnostic & Post-Practice Intelligence Loop Audit
+- **Date**: 2026-10-28
+- **Objective**: Conduct comprehensive audit of `/dashboard/diagnostic` (why it's "all red" with UUIDs) and map the student learning loop: `Practice → Evidence → Repair → Reinforcement (Notes, MCQs, Dominoes, PYQs, Fillups, Mains) → Revision`.
+
+### Key Discussions & Findings
+
+1. **User Request & The Core Product Vision**:
+   - User noted the diagnostic page (`/dashboard/diagnostic`) shows 4 concepts tracked, 0 healthy, 4 "Need Attention" ("all red"), with concepts displaying as cryptic UUIDs (`75d55a3b...`).
+   - The user defined the intended cognitive loop:
+     > *"Practice tells the app what happened → Repair fixes the immediate problem → related learning reinforces it → Revision remembers it over time. Practice → Evidence → Repair / Reinforcement → More learning material → Revision"*
+   - Post-practice should dynamically serve:
+     - **Notes**: Targeted micro-notes for the specific misconception/struggle (NOT generic chapter dumps).
+     - **More MCQs**: Follow-up questions on the same/related concept to test whether improvement transfers.
+     - **Dominoes**: Concept relationships where learning one unlocks/links the next relevant concept.
+     - **PYQs**: UPSC Past Year Questions with relevance analysis.
+     - **Active Recall / Fill-in-the-blank drills**: When retrieval is the root issue.
+     - **Mains-oriented drills / analytical prompts**: When deeper conceptual reasoning is needed.
+     - **Revision scheduling**: Explicitly feeding into the future revision queue.
+
+2. **Audit Findings: Diagnostic Page (`/dashboard/diagnostic`)**:
+   - **Bug 1: UUID Display**: `diagnostic.service.ts` only reads `revision_events` and groups by `conceptId` (UUID). It never queries the `concepts` table (`displayName`, `subject`). `DiagnosticView.tsx` uses `shortenId()` which truncates the UUID to 8 characters (`75d55a3b…`). The "Top Priority" card also shows UUIDs.
+   - **Bug 2: "All Red" / Read-Only Dead End**: The scoring engine detects gaps accurately, but the page offers **zero action buttons** (no "Practice", "Repair", "Study Notes"). It is an analytics dead end.
+   - **Bug 3: Disconnect between Diagnostic (R2) and Repair (R3)**:
+     - Diagnostic classifies 4 gaps: `concept_gap`, `memory_gap`, `calibration_gap`, `revision_gap`.
+     - Repair engine uses 7 failure reasons: `concept_not_understood`, `could_not_recall`, `misunderstood_question`, `guessed`, `overconfident`, `careless_mistake`, `not_sure`.
+     - There is no bridge allowing a student to trigger a repair from the Diagnostic page.
+   - **Bug 4: 500-Event Cap**: `getEventsByUser(userId, 500)` causes older concepts to drop off for active users.
+   - **Bug 5: `learner_adaptive_profile` Untouched**: The profile table has `conceptGaps` and `recommendations` JSONB columns, but the diagnostic engine never syncs with it.
+
+3. **Audit Findings: Post-Practice & Content Reality**:
+   - **Crucial Clarification**: The existing `NoteCard` on the Knowledge page and the `Mains questions` in `PracticeCard` are **static, pre-generated batch content** from concept hydration. They are NOT the dynamic post-practice reinforcement the app is intended to provide.
+   - **Post-Practice Dead Stop**: In `PracticeCard.tsx`, once an MCQ failure is diagnosed and repaired, the flow concludes with static text:
+     - *"Repair complete — nothing more to do here for now."*
+     - *"Noted. This concept will come back in your normal revision."*
+   - There is no dynamic post-practice generation of targeted micro-notes, transfer MCQs, domino links, PYQs, fill-in-the-blank drills, or mains reasoning questions based on student feedback.
+   - Fill-in-the-blank drills do not exist anywhere in the app yet.
+
+### Current State & Next Steps (Ready for Next Session Catchup)
+
+**Top Priorities for Next Session**:
+1. **Fix Diagnostic Display & Usability (Phase 1)**:
+   - In `diagnostic.service.ts`, batch-fetch `displayName` and `subject` from `concepts` table for all concept IDs in overview & concept reports.
+   - Update `DiagnosticView.tsx` to display real names and add direct action buttons per gap type (e.g., "Practice Concept", "Start Repair", "Review in Revision").
+2. **Build Post-Practice Orchestrator (Phase 2)**:
+   - Create post-practice session summary & reinforcement flow.
+   - Wire student failure mode + post-repair understanding to dynamic generation:
+     - Dynamic targeted note for the misconception.
+     - Transfer MCQ.
+     - Concept dominoes / Related concepts drawer.
+     - PYQ matching.
+     - Fill-in-the-blank / active recall interactive drill.
+     - Mains analytical reasoning drill.
+     - Spaced repetition confirmation banner.
+

@@ -59,7 +59,7 @@ function getProviderConfig(): AIProviderConfig {
       return {
         provider: "groq",
         baseUrl: process.env.GROQ_BASE_URL ?? "https://api.groq.com",
-        model: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+        model: process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
         defaultTemperature: 0.1,
         defaultMaxTokens: 4096,
         timeoutMs: 30_000, // Groq is extremely fast

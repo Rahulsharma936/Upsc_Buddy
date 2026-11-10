@@ -36,7 +36,22 @@ import {
   Zap,
   Eye,
   SkipForward,
+  BookOpen,
+  ArrowRight,
+  Lightbulb,
+  Scale,
+  Search,
+  Target,
+  Compass,
+  XCircle,
 } from "lucide-react";
+import {
+  decideNextAction,
+  applyReofferLimit,
+  MAX_ADDITIONAL_REPAIR_OFFERS,
+} from "@/lib/repair/repair-next-action";
+import type { RepairNextAction } from "@/lib/repair/repair-next-action";
+import type { PostRepairUnderstanding } from "@/lib/evidence/evidence.types";
 
 interface RevisionItem {
   conceptId: string;
@@ -84,6 +99,230 @@ const MASTERY_CONFIG: Record<string, { label: string; color: string; icon: typeo
   unseen: { label: "Unseen", color: "text-muted-foreground bg-muted", icon: Clock },
 };
 
+// ─── Repair types (inline — avoids importing server-only modules) ──
+
+interface RepairVerification {
+  question: string;
+  options: { a: string; b: string; c: string; d: string };
+  correctAnswer: string;
+  explanation: string;
+}
+
+interface RepairRetrieval {
+  prompt: string;
+  cue: string | null;
+}
+
+interface RepairReveal {
+  expectedAnswer: string;
+  feedback: string;
+}
+
+interface RepairExplanation {
+  coreIdea: string;
+  whyItMatters: string;
+  example: string | null;
+  keyDistinction: string | null;
+}
+
+interface RepairCommon {
+  requestId: string;
+  conceptId: string;
+  failureReason: string;
+  verification: RepairVerification;
+}
+
+interface ConceptTeachingRepairData extends RepairCommon {
+  repairIntent: "concept_teaching";
+  explanation: RepairExplanation;
+}
+
+interface ActiveRecallRepairData extends RepairCommon {
+  repairIntent: "active_recall";
+  retrieval: RepairRetrieval;
+  reveal: RepairReveal;
+}
+
+interface QuestionInterpretationRepairData extends RepairCommon {
+  repairIntent: "question_interpretation";
+  breakdown: {
+    whatItAsked: string;
+    decisiveWording: string;
+    whyYourAnswerMissed: string | null;
+    whatToLookFor: string;
+  };
+}
+
+interface UncertaintyResolutionRepairData extends RepairCommon {
+  repairIntent: "uncertainty_resolution";
+  breakdown: {
+    keyDistinction: string;
+    whyBetterSupported: string;
+    competingOption: string | null;
+    howToDecide: string;
+  };
+}
+
+interface CalibrationRepairData extends RepairCommon {
+  repairIntent: "calibration";
+  breakdown: {
+    whatYouBelieved: string;
+    whatWasActuallyCorrect: string;
+    whereConfidenceBroke: string | null;
+    selfCheck: string;
+  };
+}
+
+interface ErrorAwarenessRepairData extends RepairCommon {
+  repairIntent: "error_awareness";
+  breakdown: {
+    whatWasOverlooked: string;
+    theTrap: string;
+    checkingStep: string | null;
+    patternAwareness: string;
+  };
+}
+
+interface ClarificationRepairData {
+  requestId: string;
+  conceptId: string;
+  failureReason: string;
+  repairIntent: "clarification";
+  breakdown: {
+    whatTheQuestionNeeded: string;
+    possibleStumblingPoints: string[];
+    howToNarrowItDown: string | null;
+    nextTimeStrategy: string;
+  };
+  verification: null;
+}
+
+type RevisionRepairData =
+  | ConceptTeachingRepairData
+  | ActiveRecallRepairData
+  | QuestionInterpretationRepairData
+  | UncertaintyResolutionRepairData
+  | CalibrationRepairData
+  | ErrorAwarenessRepairData
+  | ClarificationRepairData;
+
+/** Header shown at the top of the repair card, per repair mode. */
+const REPAIR_MODES: Record<string, { icon: typeof Brain; title: string }> = {
+  concept_teaching: { icon: Lightbulb, title: "Targeted Explanation" },
+  active_recall: { icon: Brain, title: "Try to Recall This" },
+  question_interpretation: { icon: Search, title: "What This Question Asked" },
+  uncertainty_resolution: { icon: Scale, title: "How To Choose Confidently" },
+  calibration: { icon: Target, title: "Confidence Check" },
+  error_awareness: { icon: AlertTriangle, title: "What Was Overlooked" },
+  clarification: { icon: Compass, title: "Finding What Went Wrong" },
+};
+
+/** One labelled block inside the repair card. */
+interface RepairBlock {
+  label: string;
+  text: string;
+  italic?: boolean;
+}
+
+function revisionRepairBlocks(repair: RevisionRepairData): RepairBlock[] {
+  switch (repair.repairIntent) {
+    case "concept_teaching":
+      return [
+        { label: "Core Idea", text: repair.explanation.coreIdea },
+        { label: "Why It Matters", text: repair.explanation.whyItMatters },
+        ...(repair.explanation.example
+          ? [{ label: "Example", text: repair.explanation.example, italic: true }]
+          : []),
+        ...(repair.explanation.keyDistinction
+          ? [{ label: "Key Distinction", text: repair.explanation.keyDistinction }]
+          : []),
+      ];
+    case "active_recall":
+      return [
+        { label: "Answer", text: repair.reveal.expectedAnswer },
+        { label: "How Did You Do?", text: repair.reveal.feedback },
+      ];
+    case "question_interpretation":
+      return [
+        { label: "What It Asked", text: repair.breakdown.whatItAsked },
+        { label: "The Wording That Decided It", text: repair.breakdown.decisiveWording },
+        ...(repair.breakdown.whyYourAnswerMissed
+          ? [{ label: "Why Your Answer Missed", text: repair.breakdown.whyYourAnswerMissed }]
+          : []),
+        { label: "What To Look For Next Time", text: repair.breakdown.whatToLookFor },
+      ];
+    case "uncertainty_resolution":
+      return [
+        { label: "Key Distinction", text: repair.breakdown.keyDistinction },
+        { label: "Why It's Better Supported", text: repair.breakdown.whyBetterSupported },
+        ...(repair.breakdown.competingOption
+          ? [{ label: "The Tempting Option", text: repair.breakdown.competingOption }]
+          : []),
+        { label: "How To Decide Next Time", text: repair.breakdown.howToDecide },
+      ];
+    case "calibration":
+      return [
+        { label: "What You Believed", text: repair.breakdown.whatYouBelieved },
+        { label: "What Was Actually Correct", text: repair.breakdown.whatWasActuallyCorrect },
+        ...(repair.breakdown.whereConfidenceBroke
+          ? [{ label: "Where Confidence Broke", text: repair.breakdown.whereConfidenceBroke }]
+          : []),
+        { label: "Self-Check For Next Time", text: repair.breakdown.selfCheck },
+      ];
+    case "error_awareness":
+      return [
+        { label: "What Was Overlooked", text: repair.breakdown.whatWasOverlooked },
+        { label: "The Trap", text: repair.breakdown.theTrap },
+        ...(repair.breakdown.checkingStep
+          ? [{ label: "Checking Step", text: repair.breakdown.checkingStep }]
+          : []),
+        { label: "Pattern To Watch For", text: repair.breakdown.patternAwareness },
+      ];
+    case "clarification":
+      return [
+        { label: "What The Question Needed", text: repair.breakdown.whatTheQuestionNeeded },
+        ...repair.breakdown.possibleStumblingPoints.map((point, i) => ({
+          label: `Possible Stumbling Point ${i + 1}`,
+          text: point,
+        })),
+        ...(repair.breakdown.howToNarrowItDown
+          ? [{ label: "How To Narrow It Down", text: repair.breakdown.howToNarrowItDown }]
+          : []),
+        { label: "Strategy For Next Time", text: repair.breakdown.nextTimeStrategy },
+      ];
+  }
+}
+
+/** Renders one labelled block. Same markup used in PracticeCard. */
+function RevisionRepairFieldBlock({ label, text, italic }: RepairBlock) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-600/70 dark:text-blue-400/70 mb-0.5">{label}</p>
+      <p className={cn("text-xs leading-relaxed text-foreground", italic && "italic")}>{text}</p>
+    </div>
+  );
+}
+
+// ─── Post-repair self-assessment (R3.3) ─────────────────────
+
+const POST_REPAIR_UNDERSTANDING = [
+  { value: "understood", label: "I understand it", emoji: "💡" },
+  { value: "somewhat_unsure", label: "I\u2019m somewhat unsure", emoji: "🤔" },
+  { value: "still_not_understood", label: "I still don\u2019t understand it", emoji: "❓" },
+] as const;
+
+// ─── Revision repair: failure reason mapping ─────────────────
+// When a student marks "Forgot" or "Partially" in revision,
+// we offer a repair CTA. The repair uses "could_not_recall" for
+// "Forgot" (most appropriate — they couldn't retrieve it) and
+// lets the student pick for "Partially".
+
+const REVISION_REPAIR_CTA: Record<string, { label: string; failureReason: string }> = {
+  forgot: { label: "Help me re-learn this concept", failureReason: "concept_not_understood" },
+  partially: { label: "Help me recall this better", failureReason: "could_not_recall" },
+};
+
+
 export function RevisionList() {
   const [recommendations, setRecommendations] = useState<RevisionItem[]>([]);
   const [stats, setStats] = useState<RevisionStats | null>(null);
@@ -103,6 +342,33 @@ export function RevisionList() {
   const [completedConcepts, setCompletedConcepts] = useState<
     Record<string, { assessment: string; intervalDays?: number }>
   >({});
+
+  // ─── Repair state (keyed by conceptId) ──────────────────
+  const [repairOffered, setRepairOffered] = useState<Record<string, string>>({});
+  const [repairLoading, setRepairLoading] = useState<Record<string, boolean>>({});
+  const [repairData, setRepairData] = useState<Record<string, RevisionRepairData>>({});
+  const [repairError, setRepairError] = useState<Record<string, string>>({});
+  // Verification answer state within the repair
+  const [verificationAnswer, setVerificationAnswer] = useState<Record<string, string>>({});
+  const [verificationRevealed, setVerificationRevealed] = useState<Record<string, boolean>>({});
+  const [verificationSaving, setVerificationSaving] = useState<Record<string, boolean>>({});
+  const [verificationSaveFailed, setVerificationSaveFailed] = useState<Record<string, boolean>>({});
+  // R3.5: recall reveal for active_recall repairs
+  const [recallRevealed, setRecallRevealed] = useState<Record<string, boolean>>({});
+  // R3.3: Post-repair self-assessment
+  const [understandingAnswer, setUnderstandingAnswer] = useState<Record<string, string>>({});
+  const [understandingSaving, setUnderstandingSaving] = useState<Record<string, boolean>>({});
+  const [understandingSaveFailed, setUnderstandingSaveFailed] = useState<Record<string, boolean>>({});
+  // R3.4: Next action
+  const [nextAction, setNextAction] = useState<Record<string, RepairNextAction>>({});
+  const [reoffersUsed, setReoffersUsed] = useState<Record<string, number>>({});
+
+  /** Drop one key from a per-concept state map. */
+  const clearKey = <T,>(prev: Record<string, T>, key: string): Record<string, T> => {
+    const next = { ...prev };
+    delete next[key];
+    return next;
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -198,6 +464,7 @@ export function RevisionList() {
   };
 
   // R1.3: Handle self-assessment — call existing revision API
+  // For "forgot" and "partially", we keep the concept active to offer a repair.
   const handleSelfAssess = async (
     conceptId: string,
     assessment: "remembered" | "partially" | "forgot",
@@ -223,36 +490,43 @@ export function RevisionList() {
         console.warn("[Revision] Self-assessment failed:", res.status);
       }
 
-      // Show brief completion feedback
-      setCompletedConcepts((prev) => ({
-        ...prev,
-        [conceptId]: {
-          assessment,
-          intervalDays: json.data?.intervalDays,
-        },
-      }));
+      // "Remembered" → standard flow: show feedback, remove from list.
+      // "Forgot"/"Partially" → keep active, offer repair CTA.
+      if (assessment === "remembered") {
+        setCompletedConcepts((prev) => ({
+          ...prev,
+          [conceptId]: {
+            assessment,
+            intervalDays: json.data?.intervalDays,
+          },
+        }));
 
-      // Clear active state
-      setActiveConceptId(null);
-      setMaterialRevealed(false);
-      setConceptNote(null);
+        setActiveConceptId(null);
+        setMaterialRevealed(false);
+        setConceptNote(null);
 
-      // Remove from list after a brief moment
-      setTimeout(() => {
-        setRecommendations((prev) => prev.filter((r) => r.conceptId !== conceptId));
-        setCompletedConcepts((prev) => {
-          const next = { ...prev };
-          delete next[conceptId];
-          return next;
-        });
-        // Refresh stats
-        fetch("/api/revision?action=stats")
-          .then((r) => r.json())
-          .then((j) => {
-            if (j.success) setStats(j.data?.stats ?? null);
-          })
-          .catch(() => {});
-      }, 1200);
+        setTimeout(() => {
+          setRecommendations((prev) => prev.filter((r) => r.conceptId !== conceptId));
+          setCompletedConcepts((prev) => {
+            const next = { ...prev };
+            delete next[conceptId];
+            return next;
+          });
+          fetch("/api/revision?action=stats")
+            .then((r) => r.json())
+            .then((j) => {
+              if (j.success) setStats(j.data?.stats ?? null);
+            })
+            .catch(() => {});
+        }, 1200);
+      } else {
+        // "forgot" or "partially" — keep the card active and offer a repair CTA.
+        // SM-2 has already been updated above; this only affects the UI.
+        const ctaConfig = REVISION_REPAIR_CTA[assessment];
+        if (ctaConfig) {
+          setRepairOffered((prev) => ({ ...prev, [conceptId]: assessment }));
+        }
+      }
     } catch (err) {
       console.warn("[Revision] Self-assessment error:", err);
     } finally {
@@ -303,6 +577,211 @@ export function RevisionList() {
     setActiveConceptId(null);
     setMaterialRevealed(false);
     setConceptNote(null);
+  };
+
+  // ─── Repair handlers (keyed by conceptId) ─────────────────
+
+  /**
+   * R3.2a: Fetch a repair for a revision concept the student struggled with.
+   *
+   * Uses the mapped failure reason from REVISION_REPAIR_CTA rather than
+   * asking the student "what went wrong?" — in revision, the self-assessment
+   * already tells us enough (Forgot → concept_not_understood, Partially →
+   * could_not_recall).
+   */
+  const handleRequestRevisionRepair = (conceptId: string) => {
+    const assessment = repairOffered[conceptId];
+    if (!assessment) return;
+
+    const ctaConfig = REVISION_REPAIR_CTA[assessment];
+    if (!ctaConfig) return;
+
+    setRepairLoading((prev) => ({ ...prev, [conceptId]: true }));
+    setRepairError((prev) => ({ ...prev, [conceptId]: "" }));
+
+    fetch("/api/repair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conceptId,
+        failureReason: ctaConfig.failureReason,
+        // No questionContext — revision repairs are concept-level, not MCQ-level.
+      }),
+    })
+      .then(async (res) => {
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          throw new Error(json.error?.message || "Repair request failed");
+        }
+        setRepairData((prev) => ({ ...prev, [conceptId]: json.data.repair }));
+      })
+      .catch((err) => {
+        setRepairError((prev) => ({
+          ...prev,
+          [conceptId]: err.message || "Something went wrong",
+        }));
+      })
+      .finally(() => {
+        setRepairLoading((prev) => ({ ...prev, [conceptId]: false }));
+      });
+  };
+
+  /**
+   * R3.3: Student answers the post-repair verification MCQ.
+   *
+   * Grades locally, then persists as a repair_verification event.
+   * Does NOT touch SM-2.
+   */
+  const handleRevisionVerificationSelect = (conceptId: string, opt: string) => {
+    const repair = repairData[conceptId];
+    if (!repair) return;
+
+    // Duplicate guard
+    if (verificationAnswer[conceptId] || verificationSaving[conceptId]) return;
+
+    setVerificationAnswer((prev) => ({ ...prev, [conceptId]: opt }));
+    setVerificationRevealed((prev) => ({ ...prev, [conceptId]: true }));
+    setVerificationSaving((prev) => ({ ...prev, [conceptId]: true }));
+    setVerificationSaveFailed((prev) => ({ ...prev, [conceptId]: false }));
+
+    fetch("/api/repair/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestId: repair.requestId,
+        conceptId: repair.conceptId,
+        failureReason: repair.failureReason,
+        repairIntent: repair.repairIntent,
+        verificationSelectedAnswer: opt,
+        verificationCorrectAnswer: repair.verification!.correctAnswer,
+        verificationQuestion: repair.verification!.question,
+      }),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.success) {
+          throw new Error(json?.error?.message || "Verification save failed");
+        }
+      })
+      .catch((err) => {
+        console.warn("[Revision] Repair verification save failed:", err);
+        setVerificationSaveFailed((prev) => ({ ...prev, [conceptId]: true }));
+      })
+      .finally(() => {
+        setVerificationSaving((prev) => ({ ...prev, [conceptId]: false }));
+      });
+  };
+
+  /**
+   * R3.3: Student reports understanding after repair.
+   *
+   * Also derives the R3.4 next-action locally, gated by the re-offer budget.
+   */
+  const handleRevisionUnderstandingSelect = (
+    conceptId: string,
+    value: PostRepairUnderstanding,
+  ) => {
+    const repair = repairData[conceptId];
+    if (!repair) return;
+
+    if (understandingAnswer[conceptId] || understandingSaving[conceptId]) return;
+
+    setUnderstandingAnswer((prev) => ({ ...prev, [conceptId]: value }));
+    setUnderstandingSaving((prev) => ({ ...prev, [conceptId]: true }));
+    setUnderstandingSaveFailed((prev) => ({ ...prev, [conceptId]: false }));
+
+    // R3.4: decide next action
+    setNextAction((prev) => ({
+      ...prev,
+      [conceptId]: applyReofferLimit(
+        decideNextAction({
+          verificationCorrect:
+            verificationAnswer[conceptId] === repair.verification!.correctAnswer,
+          postRepairUnderstanding: value,
+        }),
+        reoffersUsed[conceptId] ?? 0,
+      ),
+    }));
+
+    fetch("/api/repair/understanding", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestId: repair.requestId,
+        postRepairUnderstanding: value,
+      }),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.success) {
+          throw new Error(json?.error?.message || "Self-assessment save failed");
+        }
+      })
+      .catch((err) => {
+        console.warn("[Revision] Post-repair understanding save failed:", err);
+        setUnderstandingSaveFailed((prev) => ({ ...prev, [conceptId]: true }));
+      })
+      .finally(() => {
+        setUnderstandingSaving((prev) => ({ ...prev, [conceptId]: false }));
+      });
+  };
+
+  /**
+   * R3.4: Serve one extra repair for this concept.
+   *
+   * Clears the previous repair loop so the fresh one starts clean,
+   * then reuses handleRequestRevisionRepair.
+   */
+  const handleRevisionAnotherRepair = (conceptId: string) => {
+    if ((reoffersUsed[conceptId] ?? 0) >= MAX_ADDITIONAL_REPAIR_OFFERS) return;
+    if (repairLoading[conceptId]) return;
+
+    setReoffersUsed((prev) => ({ ...prev, [conceptId]: (prev[conceptId] ?? 0) + 1 }));
+
+    setRepairData((prev) => clearKey(prev, conceptId));
+    setVerificationAnswer((prev) => clearKey(prev, conceptId));
+    setVerificationRevealed((prev) => clearKey(prev, conceptId));
+    setRecallRevealed((prev) => clearKey(prev, conceptId));
+    setVerificationSaveFailed((prev) => clearKey(prev, conceptId));
+    setUnderstandingAnswer((prev) => clearKey(prev, conceptId));
+    setUnderstandingSaveFailed((prev) => clearKey(prev, conceptId));
+    setNextAction((prev) => clearKey(prev, conceptId));
+
+    handleRequestRevisionRepair(conceptId);
+  };
+
+  /**
+   * Dismiss the repair offer and remove the concept from the list.
+   * The SM-2 update was already done during self-assessment.
+   */
+  const handleDismissRepair = (conceptId: string) => {
+    // Clean up all repair state for this concept
+    setRepairOffered((prev) => clearKey(prev, conceptId));
+    setRepairData((prev) => clearKey(prev, conceptId));
+    setRepairLoading((prev) => clearKey(prev, conceptId));
+    setRepairError((prev) => clearKey(prev, conceptId));
+    setVerificationAnswer((prev) => clearKey(prev, conceptId));
+    setVerificationRevealed((prev) => clearKey(prev, conceptId));
+    setVerificationSaveFailed((prev) => clearKey(prev, conceptId));
+    setRecallRevealed((prev) => clearKey(prev, conceptId));
+    setUnderstandingAnswer((prev) => clearKey(prev, conceptId));
+    setUnderstandingSaveFailed((prev) => clearKey(prev, conceptId));
+    setNextAction((prev) => clearKey(prev, conceptId));
+    setReoffersUsed((prev) => clearKey(prev, conceptId));
+
+    setActiveConceptId(null);
+    setMaterialRevealed(false);
+    setConceptNote(null);
+
+    // Remove from list
+    setRecommendations((prev) => prev.filter((r) => r.conceptId !== conceptId));
+    // Refresh stats
+    fetch("/api/revision?action=stats")
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.success) setStats(j.data?.stats ?? null);
+      })
+      .catch(() => {});
   };
 
   if (loading) {
@@ -579,7 +1058,8 @@ export function RevisionList() {
                             )}
                           </div>
 
-                          {/* Self-assessment buttons */}
+                          {/* Self-assessment buttons — hidden once repair is offered */}
+                          {!repairOffered[item.conceptId] && (
                           <div className="space-y-2">
                             <p className="text-xs font-medium text-muted-foreground">
                               How well did you recall this?
@@ -610,6 +1090,255 @@ export function RevisionList() {
                               Skip this concept
                             </button>
                           </div>
+                          )}
+
+                          {/* ─── Repair CTA + full repair lifecycle ─── */}
+                          {repairOffered[item.conceptId] && (() => {
+                            const assessment = repairOffered[item.conceptId];
+                            const ctaConfig = REVISION_REPAIR_CTA[assessment];
+                            const repair = repairData[item.conceptId];
+
+                            return (
+                              <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-300">
+                                {/* Repair CTA button — before repair is loaded */}
+                                {!repair && (
+                                  <div className="rounded-md border border-amber-200/60 dark:border-amber-500/20 bg-amber-50/50 dark:bg-amber-500/5 px-3 py-2.5">
+                                    <button
+                                      onClick={() => handleRequestRevisionRepair(item.conceptId)}
+                                      disabled={repairLoading[item.conceptId]}
+                                      className="flex items-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 transition-colors disabled:opacity-50"
+                                    >
+                                      {repairLoading[item.conceptId] ? (
+                                        <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating explanation…</>
+                                      ) : (
+                                        <><BookOpen className="h-3.5 w-3.5" /> {ctaConfig?.label ?? "Help me with this concept"} <ArrowRight className="h-3 w-3" /></>
+                                      )}
+                                    </button>
+                                    {repairError[item.conceptId] && (
+                                      <p className="mt-1.5 text-[10px] text-red-600 dark:text-red-400">{repairError[item.conceptId]}</p>
+                                    )}
+                                    <button
+                                      onClick={() => handleDismissRepair(item.conceptId)}
+                                      className="mt-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                                    >
+                                      Skip — I&apos;ll review it later
+                                    </button>
+                                  </div>
+                                )}
+
+                                {/* ─── Repair card ─── */}
+                                {repair && (
+                                  <div className="space-y-3 rounded-lg border border-blue-200/60 dark:border-blue-500/20 bg-blue-50/30 dark:bg-blue-500/5 px-4 py-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                                    {/* Repair mode header */}
+                                    {(() => {
+                                      const ModeIcon = REPAIR_MODES[repair.repairIntent].icon;
+                                      return (
+                                        <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                                          <ModeIcon className="h-3.5 w-3.5" />
+                                          {REPAIR_MODES[repair.repairIntent].title}
+                                        </div>
+                                      );
+                                    })()}
+
+                                    {/* Repair content blocks */}
+                                    {repair.repairIntent === "active_recall" ? (
+                                      <>
+                                        {/* R3.5: Retrieval first, answer second */}
+                                        <div>
+                                          <p className="text-xs leading-relaxed text-foreground font-medium">{repair.retrieval.prompt}</p>
+                                          {repair.retrieval.cue && (
+                                            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                                              <span className="font-medium">Cue:</span> {repair.retrieval.cue}
+                                            </p>
+                                          )}
+                                        </div>
+
+                                        {!recallRevealed[item.conceptId] ? (
+                                          <div>
+                                            <p className="mb-1.5 text-[11px] text-muted-foreground">
+                                              Answer it in your head first — then check yourself.
+                                            </p>
+                                            <button
+                                              onClick={() => setRecallRevealed((prev) => ({ ...prev, [item.conceptId]: true }))}
+                                              className="flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300 hover:text-blue-900 dark:hover:text-blue-100 transition-colors"
+                                            >
+                                              <ArrowRight className="h-3.5 w-3.5" /> Show me the answer
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <div className="space-y-3 animate-in fade-in duration-200">
+                                            {revisionRepairBlocks(repair).map((block) => (
+                                              <RevisionRepairFieldBlock key={block.label} {...block} />
+                                            ))}
+                                          </div>
+                                        )}
+                                      </>
+                                    ) : (
+                                      revisionRepairBlocks(repair).map((block) => (
+                                        <RevisionRepairFieldBlock key={block.label} {...block} />
+                                      ))
+                                    )}
+
+                                    {/* Clarification special case — no verification */}
+                                    {repair.repairIntent === "clarification" && (
+                                      <p className="mt-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-700 dark:text-blue-300">
+                                        <Compass className="h-3.5 w-3.5 shrink-0" />
+                                        Use these pointers to identify what specifically blocked you, then try a similar question.
+                                      </p>
+                                    )}
+
+                                    {/* ─── Verification MCQ (R3.3) ─── */}
+                                    {repair.verification && (repair.repairIntent !== "active_recall" || recallRevealed[item.conceptId]) && (
+                                      <div className="mt-2 rounded-md border border-blue-200/50 dark:border-blue-500/15 bg-white/50 dark:bg-blue-950/20 px-3 py-2.5">
+                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-600/70 dark:text-blue-400/70 mb-2">Let&apos;s Check</p>
+                                        <p className="text-xs font-medium leading-relaxed mb-2">{repair.verification.question}</p>
+                                        <div className="grid gap-1.5 sm:grid-cols-2">
+                                          {(["a", "b", "c", "d"] as const).map((opt) => {
+                                            const vAnswer = verificationAnswer[item.conceptId];
+                                            const isRevealed = verificationRevealed[item.conceptId];
+                                            const isCorrectOpt = repair.verification!.correctAnswer === opt;
+                                            const isSelected = vAnswer === opt;
+
+                                            return (
+                                              <button
+                                                key={opt}
+                                                onClick={() => handleRevisionVerificationSelect(item.conceptId, opt)}
+                                                disabled={!!vAnswer}
+                                                className={cn(
+                                                  "flex items-center gap-2 rounded-md border px-3 py-2 text-left text-xs transition-colors",
+                                                  isRevealed && isCorrectOpt && "border-green-500/50 bg-green-50 dark:bg-green-500/10",
+                                                  isRevealed && isSelected && !isCorrectOpt && "border-red-500/50 bg-red-50 dark:bg-red-500/10",
+                                                  !vAnswer && "hover:bg-muted/50 cursor-pointer",
+                                                  !!vAnswer && "cursor-default",
+                                                )}
+                                              >
+                                                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold">
+                                                  {opt.toUpperCase()}
+                                                </span>
+                                                <span>{repair.verification!.options[opt]}</span>
+                                                {isRevealed && isCorrectOpt && <CheckCircle2 className="ml-auto h-4 w-4 text-green-600 shrink-0" />}
+                                                {isRevealed && isSelected && !isCorrectOpt && <XCircle className="ml-auto h-4 w-4 text-red-500 shrink-0" />}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                        {verificationRevealed[item.conceptId] && (
+                                          <div className="mt-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+                                            <span className="font-medium text-foreground">
+                                              {verificationAnswer[item.conceptId] === repair.verification!.correctAnswer ? "✓ Correct! " : "✗ Not quite. "}
+                                            </span>
+                                            {repair.verification!.explanation}
+                                          </div>
+                                        )}
+                                        {verificationSaveFailed[item.conceptId] && (
+                                          <p className="mt-1.5 text-[10px] text-muted-foreground">
+                                            Couldn&apos;t save this result — your answer above still stands.
+                                          </p>
+                                        )}
+
+                                        {/* ─── R3.3: Post-repair self-assessment ─── */}
+                                        {verificationRevealed[item.conceptId] && (
+                                          <div className="mt-2.5 rounded-md border border-blue-200/60 dark:border-blue-500/20 bg-blue-50/60 dark:bg-blue-500/5 px-3 py-2.5 animate-in fade-in slide-in-from-top-1 duration-300">
+                                            <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-2.5">
+                                              How confident do you feel about this concept now?
+                                            </p>
+                                            <div className="space-y-1.5">
+                                              {POST_REPAIR_UNDERSTANDING.map((option) => {
+                                                const answered = !!understandingAnswer[item.conceptId];
+                                                const isSelected = understandingAnswer[item.conceptId] === option.value;
+
+                                                return (
+                                                  <button
+                                                    key={option.value}
+                                                    onClick={() => handleRevisionUnderstandingSelect(item.conceptId, option.value)}
+                                                    disabled={answered}
+                                                    className={cn(
+                                                      "flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-left text-xs font-medium transition-colors",
+                                                      "border-blue-200/60 dark:border-blue-500/20 text-blue-800 dark:text-blue-200",
+                                                      !answered && "bg-white dark:bg-blue-950/30 hover:bg-blue-100/80 dark:hover:bg-blue-500/15 cursor-pointer",
+                                                      answered && isSelected && "bg-blue-100/80 dark:bg-blue-500/15 border-blue-400/60 dark:border-blue-400/30 cursor-default",
+                                                      answered && !isSelected && "bg-white dark:bg-blue-950/30 opacity-50 cursor-default",
+                                                    )}
+                                                  >
+                                                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-blue-300/60 dark:border-blue-500/30 text-sm">
+                                                      {option.emoji}
+                                                    </span>
+                                                    <span>{option.label}</span>
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                            {understandingSaveFailed[item.conceptId] && (
+                                              <p className="mt-1.5 text-[10px] text-muted-foreground">
+                                                Couldn&apos;t save this — your answer above still stands.
+                                              </p>
+                                            )}
+                                          </div>
+                                        )}
+
+                                        {/* ─── R3.4: Next action ─── */}
+                                        {nextAction[item.conceptId] === "repair_complete" && (
+                                          <div className="mt-2.5">
+                                            <p className="flex items-center gap-1.5 text-[11px] font-medium text-green-700 dark:text-green-300">
+                                              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                                              Repair complete — nothing more to do here for now.
+                                            </p>
+                                            <button
+                                              onClick={() => handleDismissRepair(item.conceptId)}
+                                              className="mt-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                              Continue →
+                                            </button>
+                                          </div>
+                                        )}
+
+                                        {nextAction[item.conceptId] === "leave_for_revision" && (
+                                          <div className="mt-2.5">
+                                            <p className="text-[11px] text-muted-foreground">
+                                              Noted. This concept will come back in your normal revision.
+                                            </p>
+                                            <button
+                                              onClick={() => handleDismissRepair(item.conceptId)}
+                                              className="mt-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                              Continue →
+                                            </button>
+                                          </div>
+                                        )}
+
+                                        {nextAction[item.conceptId] === "offer_another_repair" && (
+                                          <div className="mt-2.5">
+                                            <p className="mb-1.5 text-[11px] text-muted-foreground">
+                                              Let&apos;s try explaining this a different way.
+                                            </p>
+                                            <button
+                                              onClick={() => handleRevisionAnotherRepair(item.conceptId)}
+                                              disabled={repairLoading[item.conceptId]}
+                                              className="flex items-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 transition-colors disabled:opacity-50"
+                                            >
+                                              <BookOpen className="h-3.5 w-3.5" />
+                                              {ctaConfig?.label ?? "Help me with this concept"}
+                                              <ArrowRight className="h-3 w-3" />
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* Dismiss link — always available */}
+                                    {!nextAction[item.conceptId] && repair.repairIntent === "clarification" && (
+                                      <button
+                                        onClick={() => handleDismissRepair(item.conceptId)}
+                                        className="mt-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                                      >
+                                        Done — move on →
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </CardContent>
