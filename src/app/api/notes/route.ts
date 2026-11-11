@@ -22,13 +22,21 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const subject = searchParams.get("subject");
-    const limit = Math.min(parseInt(searchParams.get("limit") ?? "50"), 100);
+    const conceptId = searchParams.get("conceptId");
+    // Default high enough that Knowledge and Revision see every concept —
+    // the old default of 50 hid older concepts and starved Revision's note lookup.
+    const limit = Math.min(parseInt(searchParams.get("limit") ?? "500"), 1000);
 
     let concepts;
     try {
-      concepts = subject
-        ? await conceptRepository.findBySubject(user.id, subject)
-        : await conceptRepository.findByUser(user.id, limit);
+      if (conceptId) {
+        const single = await conceptRepository.findById(conceptId);
+        concepts = single && single.userId === user.id ? [single] : [];
+      } else {
+        concepts = subject
+          ? await conceptRepository.findBySubject(user.id, subject)
+          : await conceptRepository.findByUser(user.id, limit);
+      }
     } catch (dbError) {
       console.error("[ROUTE] notes: DB error fetching concepts:", dbError);
       return successResponse({

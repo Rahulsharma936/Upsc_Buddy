@@ -23,6 +23,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   LayoutDashboard,
   PenLine,
+  Newspaper,
   BookOpen,
   Swords,
   RotateCcw,
@@ -39,6 +40,7 @@ const navSections = [
     items: [
       { label: "Dashboard", href: ROUTES.DASHBOARD, icon: LayoutDashboard },
       { label: "Daily Log", href: ROUTES.DAILY_LOG, icon: PenLine },
+      { label: "Newspaper", href: ROUTES.NEWSPAPER, icon: Newspaper },
     ],
   },
   {

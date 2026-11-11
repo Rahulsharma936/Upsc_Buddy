@@ -5,6 +5,9 @@
  *   Returns today's curated practice set (surfaced from inventory).
  *   NOT a dump of all generated questions.
  *
+ * Both accept &scope=static|current to limit to the student's own study or to
+ *   current affairs (Newspaper Notes).
+ *
  * GET /api/practice?mode=inventory
  *   Returns full question inventory (for "View All" mode).
  *
@@ -15,6 +18,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { conceptRepository } from "@/lib/repositories/concept.repository";
+import { parseScope, matchesScope, countByScope } from "@/lib/content-scope";
 import {
   computeDailyPractice,
   type ConceptInventory,
@@ -45,6 +49,9 @@ export async function GET(request: NextRequest) {
     // Replaces old findByUser(50) + N+1 findByConcept() loop.
     let inventory: ConceptInventory[] = [];
     let totalConcepts = 0;
+    // Static syllabus vs current affairs (newspaper) filter; counts are for the whole inventory.
+    const scope = parseScope(request.nextUrl.searchParams.get("scope"));
+    let scopeCounts = { all: 0, static: 0, current: 0 };
 
     try {
       const { conceptQuestionsRepository } = await import(
@@ -53,7 +60,10 @@ export async function GET(request: NextRequest) {
 
       const hydratedConcepts = await conceptQuestionsRepository.findAllWithConceptByUser(user.id);
 
-      inventory = hydratedConcepts.map((row) => ({
+      scopeCounts = countByScope(hydratedConcepts, (row) => ({ source: row.concept.source }));
+      inventory = hydratedConcepts
+        .filter((row) => matchesScope({ source: row.concept.source }, scope))
+        .map((row) => ({
         conceptId: row.concept.id,
         conceptName: row.concept.displayName,
         subject: row.concept.subject,
@@ -90,6 +100,8 @@ export async function GET(request: NextRequest) {
         success: true,
         data: {
           mode: "inventory",
+          scope,
+          scopeCounts,
           concepts: inventory.map((inv) => ({
             conceptId: inv.conceptId,
             conceptName: inv.conceptName,
@@ -104,9 +116,9 @@ export async function GET(request: NextRequest) {
             interviewPrompts: inv.interviewPrompts,
           })),
           totalConcepts,
-          inventorySize: inventory.length,
+          inventorySize: scopeCounts.all,
           hydratedPercent: totalConcepts > 0
-            ? Math.round((inventory.length / totalConcepts) * 100)
+            ? Math.round((scopeCounts.all / totalConcepts) * 100)
             : 0,
         },
       });
@@ -147,11 +159,13 @@ export async function GET(request: NextRequest) {
       success: true,
       data: {
         mode: "daily",
+        scope,
+        scopeCounts,
         ...dailySet,
         totalConcepts,
-        inventorySize: inventory.length,
+        inventorySize: scopeCounts.all,
         hydratedPercent: totalConcepts > 0
-          ? Math.round((inventory.length / totalConcepts) * 100)
+          ? Math.round((scopeCounts.all / totalConcepts) * 100)
           : 0,
       },
     });

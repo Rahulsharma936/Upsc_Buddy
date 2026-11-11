@@ -21,6 +21,8 @@
 import { conceptRepository } from "@/lib/repositories/concept.repository";
 import { conceptQuestionsRepository } from "@/lib/repositories/concept-questions.repository";
 import { conceptContextRepository } from "@/lib/repositories/concept-context.repository";
+import { noteRepository } from "@/lib/repositories/note.repository";
+import { auditMcqKeys } from "@/lib/ai/services/mcq-audit";
 import { getQuestionIntelligencePrompt, QUESTION_INTELLIGENCE_VERSION } from "@/lib/ai/prompts";
 import {
   questionIntelligenceResponseSchema,
@@ -158,8 +160,21 @@ export const questionIntelligenceService = {
     const primaryPaper = papers.length > 0 ? papers[0] : "GS1";
 
     // Try to get existing context intelligence for richer prompts
-    const contextRecord = await conceptContextRepository.findByConcept(params.conceptId);
-    const coreIdea = contextRecord?.staticDynamicLink
+    const [contextRecord, noteRecord] = await Promise.all([
+      conceptContextRepository.findByConcept(params.conceptId),
+      noteRepository.findLatestByConceptId(params.conceptId).catch(() => undefined),
+    ]);
+    // Ground questions in the student's own Knowledge note first (3b.2), so
+    // questions test what the note says rather than a generic one-liner.
+    const noteGrounding = noteRecord?.coreIdea
+      ? [
+          noteRecord.coreIdea,
+          (noteRecord.examTriggers ?? []).length ? `Key facts: ${(noteRecord.examTriggers ?? []).slice(0, 6).join("; ")}` : "",
+          (noteRecord.staticCurrentLink ?? []).length ? `Current linkages: ${(noteRecord.staticCurrentLink ?? []).slice(0, 3).join("; ")}` : "",
+        ].filter(Boolean).join("\n")
+      : null;
+    const coreIdea = noteGrounding
+      ?? contextRecord?.staticDynamicLink
       ?? contextRecord?.governanceRelevance
       ?? contextRecord?.constitutionalRelevance
       ?? `${concept.displayName} is a ${concept.subject} concept relevant to ${primaryPaper}.`;
@@ -298,6 +313,11 @@ export const questionIntelligenceService = {
     mains = deduplicateByField(mains, (q) => q.question);
     interview = deduplicateByField(interview, (p) => p.prompt);
 
+    // ─── Answer-key audit (3b.2) ─────────────────────────
+    // An independent solve without the stated key; disagreements are dropped.
+    const audit = await auditMcqKeys(prelims);
+    prelims = audit.kept;
+
     stats.prelimsCount = prelims.length;
     stats.mainsCount = mains.length;
     stats.interviewCount = interview.length;
@@ -330,6 +350,10 @@ export const questionIntelligenceService = {
       generationConfidence: String(aiResult.confidence),
       generationMetadata: {
         version: QUESTION_INTELLIGENCE_VERSION,
+        // Only audited inventories are used as repair check questions.
+        audited: audit.audited,
+        auditDropped: audit.dropped.length,
+        auditors: audit.auditors,
         generationTimeMs: stats.generationTimeMs,
         totalGenerated: stats.totalGenerated,
         totalSanitized: stats.totalSanitized,

@@ -518,7 +518,10 @@ section("8. Isolation — no SM-2, no legacy R2, no persistence");
     .split("\n")
     .filter((l) => /^\s*import\s+(?!type\b)/.test(l))
     .map((l) => l.trim());
-  assert(runtimeImports.length === 3, "8b: three runtime imports (zod, ai client, validator)");
+  assert(runtimeImports.length === 4, "8b: four runtime imports (zod, ai client, validator, note-grounding)");
+  assert(code.includes('from "./note-grounding"'), "8b2: grounds on the existing Knowledge note via the pure note-grounding helper");
+  const grounding = readFileSync(join(process.cwd(), "src/lib/repair/note-grounding.ts"), "utf8");
+  assert(!/^\s*import\s/m.test(grounding), "8b3: note-grounding has no imports at all — pure formatting");
   assert(code.includes('from "@/lib/ai/client"'), "8c: uses the existing AI client");
   assert(code.includes('from "@/lib/ai/utils/response-validator"'), "8d: uses the existing validator");
 

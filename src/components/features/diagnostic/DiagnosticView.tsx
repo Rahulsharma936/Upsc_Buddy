@@ -637,27 +637,22 @@ const SELF_REPORT_OPTIONS = [
   {
     value: "concept_understanding",
     label: "I don\u2019t understand this concept",
-    emoji: "🤔",
   },
   {
     value: "memory_retrieval",
     label: "I understand it but keep forgetting",
-    emoji: "💭",
   },
   {
     value: "question_performance",
     label: "I understand it but make mistakes in questions",
-    emoji: "❌",
   },
   {
     value: "revision_need",
     label: "I haven\u2019t revised it enough",
-    emoji: "📖",
   },
   {
     value: "uncertain",
     label: "I\u2019m not sure what\u2019s going wrong",
-    emoji: "🤷",
   },
 ] as const;
 
@@ -724,7 +719,7 @@ function SelfReportPrompt({ conceptId }: { conceptId: string }) {
             )}
             id={`self-report-${opt.value}-${conceptId}`}
           >
-            <span className="text-sm">{opt.emoji}</span>
+
             <span>{opt.label}</span>
           </button>
         ))}

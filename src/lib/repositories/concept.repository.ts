@@ -58,6 +58,48 @@ export const conceptRepository = {
       .limit(limit);
   },
 
+  /** Newspaper-sourced concepts for a user, newest first. Optional edition/page filter. */
+  async findNewspaperConcepts(
+    userId: string,
+    filter: {
+      newspaper?: string;
+      editionDate?: string;
+      pageNumber?: number;
+      /** Inclusive ISO date range on the edition date. */
+      editionFrom?: string;
+      editionTo?: string;
+      /** Concepts belonging to these story threads (a concept without a storyId is its own story). */
+      storyIds?: string[];
+    } = {},
+    limit = 300
+  ): Promise<Concept[]> {
+    if (filter.storyIds && filter.storyIds.length === 0) return [];
+    const conds = [
+      eq(concepts.userId, userId),
+      sql`${concepts.extractionMetadata}->>'source' = 'newspaper'`,
+    ];
+    if (filter.newspaper) conds.push(sql`${concepts.extractionMetadata}->>'newspaper' = ${filter.newspaper}`);
+    if (filter.editionDate) conds.push(sql`${concepts.extractionMetadata}->>'editionDate' = ${filter.editionDate}`);
+    if (typeof filter.pageNumber === "number") conds.push(sql`(${concepts.extractionMetadata}->>'pageNumber')::int = ${filter.pageNumber}`);
+    // ISO dates compare correctly as text.
+    if (filter.editionFrom) conds.push(sql`${concepts.extractionMetadata}->>'editionDate' >= ${filter.editionFrom}`);
+    if (filter.editionTo) conds.push(sql`${concepts.extractionMetadata}->>'editionDate' <= ${filter.editionTo}`);
+    if (filter.storyIds) {
+      conds.push(
+        sql`coalesce(${concepts.extractionMetadata}->>'storyId', ${concepts.id}::text) in (${sql.join(
+          filter.storyIds.map((s) => sql`${s}`),
+          sql`, `
+        )})`
+      );
+    }
+    return db
+      .select()
+      .from(concepts)
+      .where(and(...conds))
+      .orderBy(desc(concepts.createdAt))
+      .limit(limit);
+  },
+
   /**
    * Get ALL concepts for a user (no limit), ordered oldest-first.
    * Used exclusively by hydration/backfill — NOT for frontend queries.
@@ -156,7 +198,10 @@ export const conceptRepository = {
       .where(
         and(
           eq(concepts.dailyLogId, dailyLogId),
-          eq(concepts.userId, userId)
+          eq(concepts.userId, userId),
+          // Newspaper concepts share the day's log but are not extracted from
+          // its text; re-extracting the log must never delete them.
+          sql`coalesce(${concepts.extractionMetadata}->>'source', '') <> 'newspaper'`
         )
       )
       .returning({ id: concepts.id });

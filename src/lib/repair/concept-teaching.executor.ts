@@ -24,6 +24,8 @@
  */
 
 import { z } from "zod";
+import { formatRepairGuidance } from "./note-grounding";
+import type { RepairNoteGrounding } from "./note-grounding";
 import { executeWithRetry } from "@/lib/ai/client";
 import { validateAIResponse } from "@/lib/ai/utils/response-validator";
 import type { RepairRequest, RepairQuestionContext } from "./repair-request.builder";
@@ -135,13 +137,14 @@ function buildUserPrompt(
   subject: string,
   keywords: string[],
   questionContext: RepairQuestionContext | null,
+  conceptNote: RepairNoteGrounding | null = null,
 ): string {
   let prompt = `
 REPAIR TARGET
 Concept: ${conceptName}
 Subject: ${subject}
 Keywords: ${keywords.join(", ") || "none"}
-
+${formatRepairGuidance(conceptNote)}
 The student answered a practice MCQ about this concept incorrectly and reported:
 "I didn't understand the concept."
 `;
@@ -209,6 +212,8 @@ export interface ConceptTeachingInput {
   conceptName: string;
   conceptSubject: string;
   conceptKeywords: string[];
+  /** Latest Knowledge note for this concept — grounding only, never regenerated. */
+  conceptNote?: RepairNoteGrounding | null;
 }
 
 // ─── Executor ───────────────────────────────────────────────
@@ -226,7 +231,7 @@ export interface ConceptTeachingInput {
 export async function executeConceptTeaching(
   input: ConceptTeachingInput,
 ): Promise<ConceptTeachingRepair> {
-  const { request, conceptName, conceptSubject, conceptKeywords } = input;
+  const { request, conceptName, conceptSubject, conceptKeywords, conceptNote = null } = input;
 
   // Guard: only handle concept_teaching intent
   if (request.repairIntent !== "concept_teaching") {
@@ -242,6 +247,7 @@ export async function executeConceptTeaching(
     conceptSubject,
     conceptKeywords,
     request.questionContext,
+    conceptNote,
   );
 
   // Execute AI call using existing infrastructure

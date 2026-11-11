@@ -56,6 +56,23 @@ export const relationshipRepository = {
   },
 
   /**
+   * All relationships touching any of the given concepts, in one query.
+   */
+  async findByConcepts(conceptIds: string[]): Promise<ConceptRelationship[]> {
+    if (conceptIds.length === 0) return [];
+    return db
+      .select()
+      .from(conceptRelationships)
+      .where(
+        or(
+          inArray(conceptRelationships.sourceConceptId, conceptIds),
+          inArray(conceptRelationships.targetConceptId, conceptIds)
+        )
+      )
+      .orderBy(desc(conceptRelationships.relationshipStrength));
+  },
+
+  /**
    * Check if a directional edge already exists (source → target + type).
    * Also checks the mirror direction (target → source + type) to prevent
    * semantically equivalent duplicates.

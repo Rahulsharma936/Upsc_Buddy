@@ -3,7 +3,7 @@
  * Phase 3B: Persistence layer for question intelligence.
  */
 
-import { eq, and, or, sql } from "drizzle-orm";
+import { eq, and, or, sql, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { conceptQuestions, concepts } from "@/lib/db/schema";
 import type {
@@ -22,6 +22,17 @@ export const conceptQuestionsRepository = {
       .where(eq(conceptQuestions.conceptId, conceptId))
       .limit(1);
     return result[0];
+  },
+
+  /**
+   * Question rows for many concepts in one query (no N+1).
+   */
+  async findByConcepts(conceptIds: string[]): Promise<ConceptQuestionsRecord[]> {
+    if (conceptIds.length === 0) return [];
+    return db
+      .select()
+      .from(conceptQuestions)
+      .where(inArray(conceptQuestions.conceptId, conceptIds));
   },
 
   /**
@@ -84,6 +95,8 @@ export const conceptQuestionsRepository = {
       subject: string;
       difficulty: string;
       createdAt: Date;
+      /** extraction_metadata.source, e.g. "newspaper" for current affairs. */
+      source: string | null;
     };
     questions: {
       prelimsMcqs: any[];
@@ -98,6 +111,7 @@ export const conceptQuestionsRepository = {
         subject: concepts.subject,
         difficulty: concepts.difficulty,
         createdAt: concepts.createdAt,
+        source: sql<string | null>`${concepts.extractionMetadata}->>'source'`,
         prelimsMcqs: conceptQuestions.prelimsMcqs,
         mainsQuestions: conceptQuestions.mainsQuestions,
         interviewPrompts: conceptQuestions.interviewPrompts,
@@ -123,6 +137,7 @@ export const conceptQuestionsRepository = {
         subject: r.subject,
         difficulty: r.difficulty ?? "intermediate",
         createdAt: r.createdAt,
+        source: r.source ?? null,
       },
       questions: {
         prelimsMcqs: (r.prelimsMcqs as any[]) ?? [],

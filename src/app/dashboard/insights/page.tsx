@@ -4,7 +4,7 @@ import { InsightsDashboard } from "@/components/features/insights/InsightsDashbo
 
 export const metadata: Metadata = {
   title: "Insights — UPSC Prep",
-  description: "Adaptive intelligence, syllabus coverage, concept gaps, and study analytics",
+  description: "Answer accuracy by subject, concepts that need work, and study coverage",
 };
 
 export default function InsightsPage() {
@@ -12,7 +12,7 @@ export default function InsightsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Insights"
-        description="Adaptive intelligence about your UPSC preparation — strengths, gaps, coverage, and balance."
+        description="How you are actually answering, subject by subject, and what you have studied so far."
       />
       <InsightsDashboard />
     </div>

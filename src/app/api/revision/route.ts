@@ -18,6 +18,7 @@
  *         All evidence flows into eventMetadata but does NOT affect SM-2 quality.
  */
 
+import { parseScope } from "@/lib/content-scope";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { revisionIntelligenceService } from "@/lib/ai/services/revision-intelligence.service";
@@ -46,6 +47,7 @@ export async function GET(request: NextRequest) {
           const recommendations = await revisionIntelligenceService.getRecommendations({
             userId: user.id,
             limit,
+            scope: parseScope(request.nextUrl.searchParams.get("scope")),
           });
           return NextResponse.json({
             success: true,
@@ -62,7 +64,7 @@ export async function GET(request: NextRequest) {
 
       case "stats": {
         try {
-          const stats = await revisionIntelligenceService.getStats(user.id);
+          const stats = await revisionIntelligenceService.getStats(user.id, parseScope(request.nextUrl.searchParams.get("scope")));
           return NextResponse.json({
             success: true,
             data: { stats },
@@ -122,6 +124,8 @@ export async function POST(request: NextRequest) {
       selfAssessment,
       // Post-R2: student's authoritative failure reason for wrong MCQ
       failureReason,
+      // Written-answer evidence (revision session / Mains practice) — optional
+      writtenScore, writtenMaxScore, answerSource, answerMode, mainsQuestionIndex, answerExcerpt,
     } = body;
 
     if (!conceptId || typeof conceptId !== "string") {
@@ -176,6 +180,13 @@ export async function POST(request: NextRequest) {
       selfAssessment,
       // Post-R2: Forward failure reason evidence
       failureReason,
+      // Written-answer evidence — validated shapes only
+      ...(typeof writtenScore === "number" && writtenScore >= 0 && writtenScore <= 10 ? { writtenScore } : {}),
+      ...(typeof writtenMaxScore === "number" && writtenMaxScore > 0 ? { writtenMaxScore } : {}),
+      ...(["typed", "photo", "both", "voice"].includes(answerSource) ? { answerSource } : {}),
+      ...(["recall", "mains", "interview"].includes(answerMode) ? { answerMode } : {}),
+      ...(Number.isInteger(mainsQuestionIndex) && mainsQuestionIndex >= 0 ? { mainsQuestionIndex } : {}),
+      ...(typeof answerExcerpt === "string" && answerExcerpt.trim().length > 0 ? { answerExcerpt: answerExcerpt.trim() } : {}),
     });
 
     return NextResponse.json({

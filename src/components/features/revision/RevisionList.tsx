@@ -1,6 +1,15 @@
 "use client";
 
 /**
+ * SUPERSEDED (2026-11-11): no longer rendered on /dashboard/revision.
+ * Its recall-then-reveal self-assessment ("Remembered / Partially / Forgot")
+ * measured recognition, not recall. Replaced by RevisionSession (questions,
+ * and deterministic cloze checks for concepts without questions) plus the
+ * read-only DueConceptsList. Kept for reference until its repair-UI copy is
+ * migrated to RepairFlow.
+ */
+
+/**
  * RevisionList — Retrieval-first spaced repetition surface.
  *
  * R1.3 workflow:
@@ -50,6 +59,7 @@ import {
   applyReofferLimit,
   MAX_ADDITIONAL_REPAIR_OFFERS,
 } from "@/lib/repair/repair-next-action";
+import { ReinforcementPanel } from "@/components/features/reinforcement/ReinforcementPanel";
 import type { RepairNextAction } from "@/lib/repair/repair-next-action";
 import type { PostRepairUnderstanding } from "@/lib/evidence/evidence.types";
 
@@ -426,7 +436,7 @@ export function RevisionList() {
   const handleRevealMaterial = async (conceptId: string) => {
     setLoadingNote(true);
     try {
-      const res = await fetch("/api/notes");
+      const res = await fetch(`/api/notes?conceptId=${encodeURIComponent(conceptId)}`);
       const json = await res.json();
       if (json.success) {
         const items = json.data?.items ?? [];
@@ -1181,10 +1191,18 @@ export function RevisionList() {
 
                                     {/* Clarification special case — no verification */}
                                     {repair.repairIntent === "clarification" && (
-                                      <p className="mt-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-700 dark:text-blue-300">
-                                        <Compass className="h-3.5 w-3.5 shrink-0" />
-                                        Use these pointers to identify what specifically blocked you, then try a similar question.
-                                      </p>
+                                      <>
+                                        <p className="mt-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-700 dark:text-blue-300">
+                                          <Compass className="h-3.5 w-3.5 shrink-0" />
+                                          Use these pointers to identify what specifically blocked you, then try a similar question.
+                                        </p>
+                                        {/* Reinforcement: resurface the student's own Knowledge — no verification exists for clarification. */}
+                                        <ReinforcementPanel
+                                          conceptId={item.conceptId}
+                                          failureReason={repair.failureReason}
+                                          outcome="clarified"
+                                        />
+                                      </>
                                     )}
 
                                     {/* ─── Verification MCQ (R3.3) ─── */}
@@ -1281,8 +1299,13 @@ export function RevisionList() {
                                           <div className="mt-2.5">
                                             <p className="flex items-center gap-1.5 text-[11px] font-medium text-green-700 dark:text-green-300">
                                               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                                              Repair complete — nothing more to do here for now.
+                                              Repair complete — let&apos;s lock it in.
                                             </p>
+                                            <ReinforcementPanel
+                                              conceptId={item.conceptId}
+                                              failureReason={repair.failureReason}
+                                              outcome="repair_complete"
+                                            />
                                             <button
                                               onClick={() => handleDismissRepair(item.conceptId)}
                                               className="mt-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
@@ -1295,8 +1318,13 @@ export function RevisionList() {
                                         {nextAction[item.conceptId] === "leave_for_revision" && (
                                           <div className="mt-2.5">
                                             <p className="text-[11px] text-muted-foreground">
-                                              Noted. This concept will come back in your normal revision.
+                                              Noted. This concept will come back in your normal revision — here&apos;s what to hold onto meanwhile.
                                             </p>
+                                            <ReinforcementPanel
+                                              conceptId={item.conceptId}
+                                              failureReason={repair.failureReason}
+                                              outcome="leave_for_revision"
+                                            />
                                             <button
                                               onClick={() => handleDismissRepair(item.conceptId)}
                                               className="mt-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors"

@@ -30,6 +30,10 @@ import {
   Calendar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
+import { ContentScopeFilter } from "@/components/shared/ContentScopeFilter";
+import { scopeQuery, type ContentScope } from "@/lib/content-scope";
+import { ROUTES } from "@/lib/constants/routes";
 
 interface SurfacedItem {
   conceptId: string;
@@ -62,6 +66,8 @@ interface DailyPracticeData {
   };
   // inventory mode fields
   concepts?: SurfacedItem[];
+  scope?: ContentScope;
+  scopeCounts?: Record<ContentScope, number>;
 }
 
 const PRACTICE_MODES = ["All", "Prelims", "Mains", "Interview"] as const;
@@ -77,7 +83,7 @@ const REASON_LABELS: Record<string, { label: string; color: string }> = {
 
 type ViewMode = "daily" | "inventory";
 
-export function PracticeList() {
+export function PracticeList({ initialScope = "all" }: { initialScope?: ContentScope } = {}) {
   const [data, setData] = useState<DailyPracticeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -85,15 +91,23 @@ export function PracticeList() {
   const [viewMode, setViewMode] = useState<ViewMode>("daily");
   const [backfilling, setBackfilling] = useState(false);
   const [showComposition, setShowComposition] = useState(false);
+  const [scope, setScope] = useState<ContentScope>(initialScope);
 
-  const fetchPractice = useCallback(async (vm: ViewMode) => {
+  const changeScope = (next: ContentScope) => {
+    setScope(next);
+    // Keep the filter in the address so a refresh or shared link keeps it.
+    window.history.replaceState(null, "", `${window.location.pathname}${scopeQuery(next)}`);
+  };
+
+  const fetchPractice = useCallback(async (vm: ViewMode, sc: ContentScope) => {
     try {
       setLoading(true);
       setError(null);
 
-      const url = vm === "inventory"
-        ? "/api/practice?mode=inventory"
-        : "/api/practice";
+      const params = new URLSearchParams();
+      if (vm === "inventory") params.set("mode", "inventory");
+      if (sc !== "all") params.set("scope", sc);
+      const url = `/api/practice${params.size ? `?${params}` : ""}`;
 
       const res = await fetch(url);
       const json = await res.json();
@@ -111,8 +125,8 @@ export function PracticeList() {
   }, []);
 
   useEffect(() => {
-    fetchPractice(viewMode);
-  }, [fetchPractice, viewMode]);
+    fetchPractice(viewMode, scope);
+  }, [fetchPractice, viewMode, scope]);
 
   const handleBackfill = async () => {
     setBackfilling(true);
@@ -123,7 +137,7 @@ export function PracticeList() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ limit: 10, layers: ["questions", "revision"] }),
       });
-      await fetchPractice(viewMode);
+      await fetchPractice(viewMode, scope);
     } catch {
       // Silent
     } finally {
@@ -157,7 +171,7 @@ export function PracticeList() {
     return (
       <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-center">
         <p className="text-sm text-destructive">{error}</p>
-        <button onClick={() => fetchPractice(viewMode)} className="mt-3 text-sm font-medium text-primary hover:underline">
+        <button onClick={() => fetchPractice(viewMode, scope)} className="mt-3 text-sm font-medium text-primary hover:underline">
           Try again
         </button>
       </div>
@@ -212,6 +226,9 @@ export function PracticeList() {
 
   return (
     <div className="space-y-4">
+      {/* ─── Source filter: static syllabus vs current affairs ─── */}
+      <ContentScopeFilter value={scope} onChange={changeScope} counts={data.scopeCounts} idPrefix="practice-scope" />
+
       {/* ─── Header: View toggle + info ─────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         {/* View mode toggle */}
@@ -325,7 +342,15 @@ export function PracticeList() {
       </div>
 
       {/* ─── Practice cards ──────────────────────────────── */}
-      {filtered.length === 0 ? (
+      {filtered.length === 0 && scope === "current" && (data.scopeCounts?.current ?? 0) === 0 ? (
+        <div className="rounded-lg border border-border p-6 text-center text-sm text-muted-foreground" id="practice-scope-empty">
+          No current-affairs questions yet. Summarise a page in{" "}
+          <Link href={ROUTES.NEWSPAPER} className="font-medium text-foreground underline-offset-2 hover:underline">
+            Newspaper
+          </Link>{" "}
+          to add them.
+        </div>
+      ) : filtered.length === 0 ? (
         <EmptyState
           icon={<Swords className="h-6 w-6" />}
           title={viewMode === "daily" ? "All caught up" : "No matching questions"}
@@ -374,7 +399,7 @@ export function PracticeList() {
       {viewMode === "daily" && items.length > 0 && (
         <div className="flex justify-center pt-2">
           <button
-            onClick={() => fetchPractice("daily")}
+            onClick={() => fetchPractice("daily", scope)}
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             <RotateCcw className="h-3 w-3" />

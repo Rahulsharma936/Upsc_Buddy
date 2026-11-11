@@ -6,8 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "postinstall": "node scripts/copy-pdf-worker.mjs",
     "lint": "eslint",
-    "seed:ontology": "npx tsx src/lib/db/seeds/run-seed.ts"
+    "seed:ontology": "npx tsx src/lib/db/seeds/run-seed.ts",
+    "e2e:student": "npx tsx scripts/e2e-student-session.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -21,6 +23,7 @@
     "lucide-react": "^1.14.0",
     "next": "16.2.6",
     "next-themes": "^0.4.6",
+    "pdfjs-dist": "^4.10.38",
     "postgres": "^3.4.9",
     "react": "19.2.4",
     "react-day-picker": "^10.0.0",

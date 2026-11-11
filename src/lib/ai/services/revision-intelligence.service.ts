@@ -11,6 +11,7 @@
  * No AI calls — fully deterministic.
  */
 
+import type { ContentScope } from "@/lib/content-scope";
 import { revisionRepository } from "@/lib/repositories/revision.repository";
 import { conceptRepository } from "@/lib/repositories/concept.repository";
 import { conceptContextRepository } from "@/lib/repositories/concept-context.repository";
@@ -93,6 +94,14 @@ export const revisionIntelligenceService = {
     selfAssessment?: "remembered" | "partially" | "forgot";
     // Post-R2: student's authoritative failure reason for wrong MCQ
     failureReason?: string;
+    // Written answer (typed or photographed), marked by /api/answer/evaluate;
+    // the caller already mapped the mark onto `quality`.
+    writtenScore?: number;
+    writtenMaxScore?: number;
+    answerSource?: "typed" | "photo" | "both" | "voice";
+    answerMode?: "recall" | "mains" | "interview";
+    mainsQuestionIndex?: number;
+    answerExcerpt?: string;
   }): Promise<{
     mastery: ConceptMasteryRecord;
     nextReviewAt: Date;
@@ -130,6 +139,13 @@ export const revisionIntelligenceService = {
     if (params.selfAssessment !== undefined) eventMetadata.selfAssessment = params.selfAssessment;
     // Post-R2: Student's authoritative failure reason — stored for R3 consumption
     if (params.failureReason !== undefined) eventMetadata.failureReason = params.failureReason;
+    // Written-answer evidence — additive, never read by SM-2
+    if (params.writtenScore !== undefined) eventMetadata.writtenScore = params.writtenScore;
+    if (params.writtenMaxScore !== undefined) eventMetadata.writtenMaxScore = params.writtenMaxScore;
+    if (params.answerSource !== undefined) eventMetadata.answerSource = params.answerSource;
+    if (params.answerMode !== undefined) eventMetadata.answerMode = params.answerMode;
+    if (params.mainsQuestionIndex !== undefined) eventMetadata.mainsQuestionIndex = params.mainsQuestionIndex;
+    if (params.answerExcerpt !== undefined) eventMetadata.answerExcerpt = params.answerExcerpt.slice(0, 300);
 
     // Log event
     await revisionRepository.logEvent({
@@ -219,24 +235,43 @@ export const revisionIntelligenceService = {
   async getRecommendations(params: {
     userId: string;
     limit?: number;
+    /** Only static-syllabus or only current-affairs concepts (default: all). */
+    scope?: ContentScope;
   }): Promise<RevisionRecommendation[]> {
     const limit = params.limit ?? 15;
 
     // Get all due concepts
-    const dueRecords = await revisionRepository.getDueForRevision(params.userId, limit * 2);
+    const dueRecords = await revisionRepository.getDueForRevision(params.userId, limit * 2, params.scope ?? "all");
 
     if (dueRecords.length === 0) return [];
 
     // Enrich with concept data and score
     const recommendations: RevisionRecommendation[] = [];
 
-    for (const record of dueRecords) {
-      const concept = await conceptRepository.findById(record.conceptId);
-      if (!concept) continue;
+    // Batch enrichment: four queries for the whole due set instead of four
+    // per concept (this loop used to cost ~200 sequential round trips).
+    const dueIds = dueRecords.map((r) => r.conceptId);
+    const dueIdSet = new Set(dueIds);
+    const [conceptRows, contextRows, pyqRows, relationshipRows] = await Promise.all([
+      conceptRepository.findByIds(dueIds),
+      conceptContextRepository.findByConceptIds(dueIds),
+      pyqMatchRepository.findByConcepts(dueIds),
+      relationshipRepository.findByConcepts(dueIds),
+    ]);
+    const conceptById = new Map(conceptRows.map((c) => [c.id, c]));
+    const hasContext = new Set(contextRows.map((c) => c.conceptId));
+    const pyqCountByConcept = new Map<string, number>();
+    for (const m of pyqRows) pyqCountByConcept.set(m.conceptId, (pyqCountByConcept.get(m.conceptId) ?? 0) + 1);
+    const relationshipCountByConcept = new Map<string, number>();
+    for (const r of relationshipRows) {
+      for (const id of [r.sourceConceptId, r.targetConceptId]) {
+        if (dueIdSet.has(id)) relationshipCountByConcept.set(id, (relationshipCountByConcept.get(id) ?? 0) + 1);
+      }
+    }
 
-      const context = await conceptContextRepository.findByConcept(record.conceptId);
-      const pyqMatches = await pyqMatchRepository.findByConcept(record.conceptId);
-      const relationships = await relationshipRepository.findByConcept(record.conceptId);
+    for (const record of dueRecords) {
+      const concept = conceptById.get(record.conceptId);
+      if (!concept) continue;
 
       const mastery: MasteryState = hydrateMasteryState(record);
 
@@ -245,9 +280,9 @@ export const revisionIntelligenceService = {
         lastReviewedAt: record.lastReviewedAt,
         nextReviewAt: record.nextReviewAt,
         extractionConfidence: concept.extractionConfidence,
-        hasGSMapping: !!context,
-        hasPYQMatch: pyqMatches.length > 0,
-        relationshipCount: relationships.length,
+        hasGSMapping: hasContext.has(record.conceptId),
+        hasPYQMatch: (pyqCountByConcept.get(record.conceptId) ?? 0) > 0,
+        relationshipCount: relationshipCountByConcept.get(record.conceptId) ?? 0,
       });
 
       const forgettingProb = estimateForgettingProbability(
@@ -289,8 +324,8 @@ export const revisionIntelligenceService = {
   /**
    * Get revision analytics for a user.
    */
-  async getStats(userId: string): Promise<RevisionStats> {
-    const allMastery = await revisionRepository.getAllMastery(userId);
+  async getStats(userId: string, scope: ContentScope = "all"): Promise<RevisionStats> {
+    const allMastery = await revisionRepository.getAllMastery(userId, scope);
     const now = new Date();
 
     const stats: RevisionStats = {

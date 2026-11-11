@@ -34,7 +34,7 @@ export const EXTRACTION_VERSION = "2b.3";
 export const NOTE_GENERATION_VERSION = "2c.2";
 export const RELATIONSHIP_VERSION = "2d.1";
 export const CONTEXT_INTELLIGENCE_VERSION = "3a.1";
-export const QUESTION_INTELLIGENCE_VERSION = "3b.1";
+export const QUESTION_INTELLIGENCE_VERSION = "3b.2"; // 3b.2: UPSC 2023+ formats, intermediate–advanced, note-grounded
 
 // ─────────────────────────────────────────────────────────────
 // SYSTEM PROMPTS
@@ -215,18 +215,23 @@ STRICT RULES:
 9. Interview prompts must encourage balanced, nuanced reasoning.
 10. It is acceptable to generate FEWER questions if the concept has limited exam scope.
 
-PRELIMS MCQ RULES:
-- Test conceptual understanding, not rote memorization
-- Use statement-based patterns ("Consider the following statements")
-- Include assertion-reason patterns where appropriate
-- Every option must be plausible
-- Explanation must clarify WHY the correct answer is correct
+PRELIMS MCQ RULES (intermediate to advanced; the student has already studied this):
+- Use the formats UPSC actually sets now, and vary them across the set:
+  * "Consider the following statements: 1. ... 2. ... 3. ... How many of the above statements are correct?" — options exactly: (a) Only one (b) Only two (c) All three (d) None
+  * "Consider the following statements: Statement-I: ... Statement-II: ... Which one of the following is correct in respect of the above statements?" — options: both correct and II explains I / both correct and II does not explain I / I correct, II incorrect / I incorrect, II correct
+  * "Consider the following pairs: ... How many of the above pairs are correctly matched?"
+  * "Which of the statements given above is/are correct?" with 1 only / 2 only / both / neither — sparingly
+- Each statement must be independently verifiable and at least one must hinge on a fine distinction: an exception, a qualifier ("only", "all", "exclusively"), the correct authority/body, a year or article, or a cause-versus-effect inversion.
+- NEVER write single-fact recall questions ("Which state produces...", "Which article deals with...") with one-word options.
+- NEVER put the answer's key term in the question stem. No "All of the above". No silly or obviously wrong distractors.
+- Test understanding and application, not trivia; but be precise — wrong statements must be wrong for a specific, checkable reason.
+- The explanation must address EVERY statement or option, saying why each is correct or incorrect.
 
 MAINS QUESTION RULES:
-- Frame questions that invite multi-dimensional analysis
-- Use UPSC phrasing: "Critically examine", "Discuss the implications", "Evaluate"
-- Include guidance points to structure thinking
-- Avoid generic "Discuss..." with no analytical direction
+- Frame questions that invite multi-dimensional analysis, anchored to a specific issue, provision, case, policy or current development — never "Discuss X" in the abstract.
+- Use UPSC directive words precisely: "Critically examine", "Analyse", "Evaluate", "Discuss the implications", "Comment".
+- Set 10 marks (150 words) or 15 marks (250 words) and state the word limit in the question, e.g. "(150 words)".
+- guidancePoints are the EXAMINER'S MARKING POINTS: 4–6 concrete, checkable points an answer must contain (specific articles, cases, data, committees, examples, a balanced counter-view, a way forward) — never generic headings like "Constitutional basis".
 
 INTERVIEW PROMPT RULES:
 - Frame conversational, intellectually serious questions
@@ -665,9 +670,13 @@ Difficulty: {{difficulty}}
 GS Paper: {{primaryPaper}}
 Core Idea: {{coreIdea}}
 
+Use the Core Idea and key facts above to decide WHAT to test (the student's study scope). They are the student's own notes and may contain errors:
+- Factual accuracy overrides the notes. If a note fact is wrong (e.g. a wrong latitude, year, article or authority), never present it as correct; either avoid it or use it as the deliberately incorrect statement in a "how many are correct" question.
+- Justify every answer from established facts, never "as per the notes" or "as per the core idea".
+
 Generate:
-- 2-3 Prelims MCQs (factual discrimination)
-- 1-2 Mains questions (analytical framing)
+- 3-4 Prelims MCQs at intermediate-to-advanced level, using the formats in the rules (at least one "How many of the above" and, where it fits, one Statement-I/Statement-II)
+- 1-2 Mains questions with a word limit and concrete marking points
 - 0-1 Interview prompts (opinion/reasoning)
 
 Return empty arrays for types that don't fit this concept.
@@ -677,7 +686,7 @@ Respond ONLY in this format:
 {
   "prelimsMcqs": [
     {
-      "question": "Consider the following statements about...",
+      "question": "Consider the following statements: 1. ... 2. ... 3. ... How many of the above statements are correct?",
       "options": {"a": "...", "b": "...", "c": "...", "d": "..."},
       "correctAnswer": "b",
       "explanation": "...",
@@ -686,7 +695,7 @@ Respond ONLY in this format:
   ],
   "mainsQuestions": [
     {
-      "question": "Critically examine...",
+      "question": "Critically examine ... (150 words)",
       "guidancePoints": ["Constitutional basis", "Governance implications"],
       "estimatedMarks": 15,
       "paperRelevance": "GS2"

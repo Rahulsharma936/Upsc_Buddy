@@ -3,7 +3,7 @@
  * Phase 3A: Persistence layer for GS mappings + analytical context.
  */
 
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { conceptContextIntelligence } from "@/lib/db/schema";
 import type {
@@ -78,11 +78,10 @@ export const conceptContextRepository = {
   async findByConceptIds(conceptIds: string[]): Promise<ConceptContextRecord[]> {
     if (conceptIds.length === 0) return [];
 
-    const results: ConceptContextRecord[] = [];
-    for (const id of conceptIds) {
-      const record = await this.findByConcept(id);
-      if (record) results.push(record);
-    }
-    return results;
+    // One query instead of one per concept.
+    return db
+      .select()
+      .from(conceptContextIntelligence)
+      .where(inArray(conceptContextIntelligence.conceptId, conceptIds));
   },
 };

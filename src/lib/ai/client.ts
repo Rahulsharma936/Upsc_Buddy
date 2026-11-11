@@ -44,11 +44,16 @@ export async function executeWithRetry(
   const provider = getAIProvider();
   let lastError: Error | null = null;
 
+  let rateLimitWaitMs = 0;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       if (attempt > 0) {
-        const delay =
-          AI_PROCESSING.RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        // On a 429, wait as long as the provider asked (capped); otherwise back off.
+        const delay = rateLimitWaitMs > 0
+          ? rateLimitWaitMs
+          : AI_PROCESSING.RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        rateLimitWaitMs = 0;
 
         log.info(`Retry attempt ${attempt}/${maxRetries}`, {
           delay,
@@ -73,6 +78,11 @@ export async function executeWithRetry(
       if (isNonRetryableError(lastError)) {
         throw lastError;
       }
+
+      // A daily cap ("try again in 19m25s") cannot be waited out: fail now.
+      if (isLongRateLimit(lastError.message)) throw lastError;
+
+      rateLimitWaitMs = rateLimitDelayMs(lastError.message);
     }
   }
 
@@ -95,6 +105,26 @@ export async function checkAIHealth(): Promise<boolean> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * For a 429 rate-limit error, the wait the provider asked for ("Please try
+ * again in 9.48s") plus a small margin, capped at 30 s. 0 if not a rate limit.
+ */
+export function rateLimitDelayMs(message: string): number {
+  if (!/\b429\b|rate limit/i.test(message)) return 0;
+  const m = message.match(/try again in\s+(?:(\d+)m)?\s*([\d.]+)\s*s/i);
+  const seconds = m ? Number(m[1] ?? 0) * 60 + Number(m[2]) : 15;
+  return Math.min(30_000, Math.ceil(seconds * 1000) + 750);
+}
+
+/** True for a rate limit whose suggested wait exceeds a minute (e.g. a daily token cap). */
+export function isLongRateLimit(message: string): boolean {
+  if (!/\b429\b|rate limit/i.test(message)) return false;
+  if (/tokens per day|requests per day|\bTPD\b|\bRPD\b/i.test(message)) return true;
+  const m = message.match(/try again in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*([\d.]+)\s*s/i);
+  if (!m) return false;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3]) > 60;
 }
 
 function isNonRetryableError(error: Error): boolean {

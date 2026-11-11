@@ -189,3 +189,122 @@ All 7 failure reasons → 7 executors, all tested and passing (11 test suites):
      - Mains analytical reasoning drill.
      - Spaced repetition confirmation banner.
 
+
+---
+
+## Session 8: Vision Alignment & Steps 2–3 Audit (Practice → Repair, Post-Practice Reinforcement)
+- **Date**: 2026-11-10
+- **Objective**: Adopt the Product Vision document as standing context, verify implementation status against the real repository, then audit Step 2 (Practice → Repair integration) and Step 3 (post-practice reinforcement) read-only. No code changes.
+
+### Verified Status (from the repo, not the docs)
+- R3.6–R3.10 executors all exist in `src/lib/repair/` and are dispatched from `/api/repair`. All 7 failure reasons appear in `PracticeCard.tsx`.
+- Fresh run: 16/16 test suites pass (1,835 assertions). `npx tsc --noEmit` clean.
+- Architecture rules hold: `src/lib/repair/` imports nothing from `src/lib/diagnostic/`, SM-2, or the revision service. Verify/understanding routes write plain `revision_events` rows and never touch mastery. No technical gap labels rendered in Practice or Revision.
+- Correction: the canonical failure-reason values are `misunderstood_question` and `guessed`. Earlier memory notes mentioning `misread_question` / `eliminated_but_guessed` are wrong.
+
+### Step 2 Findings — Practice → Repair Integration
+Works end to end for all 7 reasons. Gaps, in priority order:
+1. **Verification result is client-trusted**: repair content is never stored server-side, so `/api/repair/verify` must accept `verificationCorrectAnswer` from the browser. Intent is server-derived; the result is not.
+2. **`not_sure` (clarification) leaves no repair evidence**: no verification → no understanding → no next action. Only the original `mcq_attempt` event records it.
+3. **Repair content is never persisted** for any intent — only the verification question text. Outcome is measurable; what was shown is not.
+4. **"Try a different way" re-runs the same executor with identical input**; variation is LLM randomness only.
+5. **Failed verification save silently loses the understanding too** (its POST 404s without the verification row).
+6. **Page refresh erases all repair state** (session-local by design).
+7. **Revision infers the failure reason** (Forgot → `concept_not_understood`) rather than the student choosing it — mild tension with Rule 2.
+8. **Mains / Interview have no path to repair** (display-only).
+
+### Step 3 Findings — Post-Practice Reinforcement
+- **Real code**: Knowledge is a genuine repository (`/api/notes` + per-concept RelatedConcepts / PYQSection on the Knowledge page). Revision is the only place that resurfaces existing Knowledge (reads note coreIdea / examTriggers / memoryHooks for the recall step).
+- **Still only an idea**: targeted micro-notes, transfer MCQs, dominoes, PYQ resurfacing after a miss, fill-in-the-blank drills, Mains drills. After next-action, Practice ends with a sentence of text and no link to anything.
+- **Repair generates instead of retrieves**: executors receive only concept name / subject / keywords and never read the existing `ai_notes` row. A repair's "Core Idea" can contradict the Knowledge note's. Clearest Rule 13 violation today.
+- **Nobody consumes repair events**: normalized by the evidence layer, but ignored by the diagnostic feature extractor, the surfacing engine (mastery only), and the adaptive engine (concepts + mastery only).
+- **Bug**: `/api/notes` defaults to the 50 newest concepts (max 100). Knowledge hides older concepts, and `RevisionList.tsx` calls the same endpoint with no params, so due concepts outside the newest 50 show "No study notes generated" even when a note exists. Same class of defect as Repair 2.
+
+### Current State & Next Steps
+- Nothing implemented this session (user chose "Not yet" on Phase 1 diagnostic fixes).
+- Smallest high-leverage Step 3 piece: a retrieval-only reinforcement query (concept + failureReason + verification outcome → existing note, related concepts, matched PYQs, one unseen MCQ; zero generation). Would also ground the repair executors.
+- Step 4 (question-based Revision Session) remains unbuilt; Revision is still a concept list with recall-then-reveal.
+
+---
+
+## Session 9: Build Post-Practice Reinforcement (Step 3) + Executor Grounding + Notes Cap Fix
+- **Date**: 2026-11-11
+- **Objective**: Act on the Entry 014 audit. User brief: after a wrong answer, "throw them short notes, hooks, static↔current linkage, PYQs and domino questions then and there" — retrieval, not big regenerated notes.
+
+### Key Discussions & Findings
+1. Built the retrieval-only reinforcement layer (engine + service + API + panel), grounded all 7 repair executors in the existing Knowledge note, fixed the `/api/notes` 50-cap that starved Revision. Details in [Entry 015](./features_and_changes.md#entry-015-post-practice-reinforcement--retrieval-only-lock-it-in-layer).
+2. Working tree is CRLF (`core.autocrlf=true`); scripted patches must normalize line endings.
+3. The active-recall isolation test pins the executor's runtime import count; raised 3→4 for the pure `note-grounding` helper and added an assertion that the helper itself has no imports.
+
+### Current State & Next Steps
+- tsc clean, 17/17 suites (2,268 assertions). Nothing committed. UI panel not yet exercised with a logged-in session.
+- Next: in-app walkthrough (miss → repair → panel), then Step 4 — a question-based Revision Session built on the same `/api/reinforce` + `MiniMcq` pieces.
+
+---
+
+## Session 10: Build the Revision Session (Step 4)
+- **Date**: 2026-11-11
+- **Objective**: Make Revision a question-based experience with a proper completion state, reusing the revision engine, question inventory, repair APIs and the new reinforcement layer.
+
+### Key Discussions & Findings
+1. Built engine + service + API + `RevisionSession` UI; extracted a shared `RepairFlow` so the session does not become a third inline copy of the repair loop. Details in [Entry 016](./features_and_changes.md#entry-016-revision-session--question-based-revision-step-4).
+2. Resume-after-exit is done without any new storage: the client sends its local midnight as `since`, and any completing event at or after it marks the concept done today.
+3. The recall fallback asks the student "What got in the way?" rather than mapping Forgot → `concept_not_understood` as RevisionList does — closes the Rule 2 tension flagged in Entry 014 for the new path.
+
+### Current State & Next Steps
+- tsc clean, 18/18 suites (2,319 assertions). Nothing committed. Steps 3 and 4 both unverified in-app (need a logged-in session with hydrated concepts).
+- Next: in-app walkthrough of both; then Step 5 end-to-end validation; follow-up refactor to move PracticeCard / RevisionList onto `RepairFlow`.
+
+---
+
+## Session 11: End-to-End Student Journey (server side)
+- **Date**: 2026-11-11
+- **Objective**: Act as a student through Steps 3–4 and find issues.
+
+### Key Discussions & Findings
+See [Entry 017](./features_and_changes.md#entry-017-end-to-end-student-journey--findings--fixes). Headline: repair evidence (`repair_verification` / `repair_understanding`) has been rejected by a DB CHECK constraint since R3.3 — migration 00017 written, **awaiting manual apply**. Session assembly 58 s → 3.2 s by batching the recommendations enrichment.
+
+### Current State & Next Steps
+1. Apply `supabase/migrations/00017_repair_event_types.sql` in the Supabase SQL editor, then `npm run e2e:student` → expect 38/38.
+2. Browser click-through of Practice → repair → panel and Revision → session (sign in first).
+3. Nothing committed yet (23+ changed files across Sessions 9–11).
+
+---
+
+## Session 12: Browser Click-Through as a Student
+- **Date**: 2026-11-11
+- **Objective**: Finish E2E by driving the real UI (user signed in as the demo student in the browser pane).
+
+### Key Discussions & Findings
+See [Entry 018](./features_and_changes.md#entry-018-browser-click-through-as-a-student--findings--fixes). Practice and Revision both work end to end in the browser; five UX/dev issues found and fixed, one of them introduced and caught within the session. Migration 00017 was applied to the user's personal project (DATABASE_URL in .env.local), never via the teamargmac connector.
+
+### Current State & Next Steps
+- Nothing committed. ~30 changed files across Sessions 9–12.
+- Suggested commits: (1) reinforcement layer + executor grounding + notes cap; (2) revision session + RepairFlow; (3) E2E script + batching + migration 00017 + click-through fixes.
+- Follow-ups: migrate PracticeCard / RevisionList onto `RepairFlow`; refresh RevisionList after a session; migration guard script that asserts the target project ref.
+
+---
+
+## Session 13: Retire Post-Reveal Self-Assessment → Cloze Recall
+- **Date**: 2026-11-11
+- **Objective**: User judged "Remembered / Partially / Forgot" after the reveal to be weak evidence. Build produce-before-reveal recall checks from existing notes.
+
+### Key Discussions & Findings
+See [Entry 019](./features_and_changes.md#entry-019-cloze-recall--retire-remembered--partially--forgot). Deterministic cloze from exam triggers/hooks, graded locally, recorded via the existing `review` event; buttons only as a labelled last resort; old list retired from the page in favour of a read-only due list that refreshes after a session.
+
+### Current State & Next Steps
+- 19/19 suites, e2e 45/45, browser-verified. Nothing committed (~37 files).
+- Next: commit; migrate PracticeCard onto RepairFlow; consider cloze on the Knowledge page as a "quick self-check" per note.
+
+---
+
+## Session 14: Serious Prep Pass
+- **Date**: 2026-11-11
+- **Objective**: Act on user feedback: no kids' vibe, no hints/emojis, no giveaway check questions, written answers with photo upload, UPSC-standard questions.
+
+### Key Discussions & Findings
+See [Entry 020](./features_and_changes.md#entry-020-serious-prep-pass--written-answers-upsc-standard-questions-answer-key-audit-no-emojis). Biggest catch: the note-grounding rule I first wrote propagated a factual error from an AI note into an answer key; fixed and backstopped by an independent answer-key audit.
+
+### Current State & Next Steps
+- Everything verified; nothing committed.
+- Next: regenerate old-prompt questions for the remaining concepts (needs user OK); add a note audit; commit.

@@ -27,6 +27,18 @@ export const pyqMatchRepository = {
   },
 
   /**
+   * Get all PYQ matches for many concepts in one query (no N+1).
+   */
+  async findByConcepts(conceptIds: string[]): Promise<PYQConceptMatch[]> {
+    if (conceptIds.length === 0) return [];
+    return db
+      .select()
+      .from(pyqConceptMatches)
+      .where(inArray(pyqConceptMatches.conceptId, conceptIds))
+      .orderBy(desc(pyqConceptMatches.matchStrength));
+  },
+
+  /**
    * Batch create matches with conflict handling.
    */
   async createMany(data: NewPYQConceptMatch[]): Promise<PYQConceptMatch[]> {

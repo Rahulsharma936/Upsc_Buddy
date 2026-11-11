@@ -3,15 +3,22 @@
  * Phase 3C: Persistence for concept mastery state + revision events.
  */
 
-import { eq, and, lte, asc, desc, sql } from "drizzle-orm";
+import { eq, and, lte, asc, desc, sql, inArray, gte } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { conceptMastery, revisionEvents } from "@/lib/db/schema";
+import { conceptMastery, revisionEvents, concepts } from "@/lib/db/schema";
+import type { ContentScope } from "@/lib/content-scope";
 import type {
   ConceptMasteryRecord,
   NewConceptMasteryRecord,
   RevisionEventRecord,
   NewRevisionEventRecord,
 } from "@/types/database.types";
+
+/** SQL condition on the joined concept for a static / current-affairs scope. */
+function scopeCondition(scope: Exclude<ContentScope, "all">) {
+  const isNews = sql`coalesce(${concepts.extractionMetadata}->>'source', '') = 'newspaper'`;
+  return scope === "current" ? isNews : sql`not (${isNews})`;
+}
 
 export const revisionRepository = {
   // ─── Mastery State ──────────────────────────────────────
@@ -71,7 +78,24 @@ export const revisionRepository = {
   },
 
   /** Get concepts due for revision (next_review_at <= now). */
-  async getDueForRevision(userId: string, limit = 20): Promise<ConceptMasteryRecord[]> {
+  async getDueForRevision(userId: string, limit = 20, scope: ContentScope = "all"): Promise<ConceptMasteryRecord[]> {
+    if (scope !== "all") {
+      // Filter by the concept's source in the query, so a narrowed list is still full.
+      const rows = await db
+        .select({ m: conceptMastery })
+        .from(conceptMastery)
+        .innerJoin(concepts, eq(concepts.id, conceptMastery.conceptId))
+        .where(
+          and(
+            eq(conceptMastery.userId, userId),
+            lte(conceptMastery.nextReviewAt, new Date()),
+            scopeCondition(scope)
+          )
+        )
+        .orderBy(asc(conceptMastery.nextReviewAt))
+        .limit(limit);
+      return rows.map((r) => r.m);
+    }
     return db
       .select()
       .from(conceptMastery)
@@ -100,7 +124,16 @@ export const revisionRepository = {
   },
 
   /** Get all mastery records for a user. */
-  async getAllMastery(userId: string): Promise<ConceptMasteryRecord[]> {
+  async getAllMastery(userId: string, scope: ContentScope = "all"): Promise<ConceptMasteryRecord[]> {
+    if (scope !== "all") {
+      const rows = await db
+        .select({ m: conceptMastery })
+        .from(conceptMastery)
+        .innerJoin(concepts, eq(concepts.id, conceptMastery.conceptId))
+        .where(and(eq(conceptMastery.userId, userId), scopeCondition(scope)))
+        .orderBy(asc(conceptMastery.nextReviewAt));
+      return rows.map((r) => r.m);
+    }
     return db
       .select()
       .from(conceptMastery)
@@ -229,6 +262,76 @@ export const revisionRepository = {
       )
       .orderBy(asc(revisionEvents.createdAt))
       .limit(limit);
+  },
+
+  /**
+   * Distinct concepts the user handled (answered / self-assessed / skipped)
+   * at or after `since`. Counts across ALL concepts — handled concepts are
+   * rescheduled and leave the due set, so this is the honest "done today".
+   */
+  async countConceptsHandledSince(
+    userId: string,
+    since: Date,
+    eventTypes: string[],
+    scope: ContentScope = "all"
+  ): Promise<number> {
+    if (eventTypes.length === 0) return 0;
+    const where = and(
+      eq(revisionEvents.userId, userId),
+      gte(revisionEvents.createdAt, since),
+      inArray(revisionEvents.eventType, eventTypes)
+    );
+    const count = sql<number>`count(distinct ${revisionEvents.conceptId})::int`;
+    const rows =
+      scope === "all"
+        ? await db.select({ n: count }).from(revisionEvents).where(where)
+        : await db
+            .select({ n: count })
+            .from(revisionEvents)
+            .innerJoin(concepts, eq(concepts.id, revisionEvents.conceptId))
+            .where(and(where, scopeCondition(scope)));
+    return rows[0]?.n ?? 0;
+  },
+
+  /**
+   * All of a user's events of the given types, oldest first, with only the
+   * columns answer-evidence needs. One query for the Insights page.
+   */
+  async getEventsByTypes(userId: string, eventTypes: readonly string[]) {
+    if (eventTypes.length === 0) return [];
+    return db
+      .select({
+        conceptId: revisionEvents.conceptId,
+        eventType: revisionEvents.eventType,
+        createdAt: revisionEvents.createdAt,
+        mcqCorrect: revisionEvents.mcqCorrect,
+        qualityRating: revisionEvents.qualityRating,
+        eventMetadata: revisionEvents.eventMetadata,
+      })
+      .from(revisionEvents)
+      .where(and(eq(revisionEvents.userId, userId), inArray(revisionEvents.eventType, [...eventTypes])))
+      .orderBy(asc(revisionEvents.createdAt));
+  },
+
+  /**
+   * Chronological (ASC) history for many concepts of a user in ONE query.
+   * Callers group by conceptId. Used by session assembly to avoid N+1.
+   */
+  async getEventsForConcepts(
+    userId: string,
+    conceptIds: string[]
+  ): Promise<RevisionEventRecord[]> {
+    if (conceptIds.length === 0) return [];
+    return db
+      .select()
+      .from(revisionEvents)
+      .where(
+        and(
+          eq(revisionEvents.userId, userId),
+          inArray(revisionEvents.conceptId, conceptIds)
+        )
+      )
+      .orderBy(asc(revisionEvents.createdAt));
   },
 
   /**
